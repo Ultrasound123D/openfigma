@@ -47,3 +47,6 @@ prisma/*.db
 *.py
 figmajsx/
 *.log
+
+# but keep the main README
+!README.md
