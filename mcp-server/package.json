@@ -1,0 +1,24 @@
+{
+  "name": "figma-editor-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP Server for Figma-like Design Editor",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "figma-editor-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

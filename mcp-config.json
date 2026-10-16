@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "figma-editor": {
+      "command": "node",
+      "args": ["E:\\figma_project (1)\\mcp-server\\dist\\index.js"],
+      "env": {
+        "EDITOR_API_URL": "http://localhost:3000"
+      }
+    }
+  }
+}
