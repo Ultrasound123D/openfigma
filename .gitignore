@@ -56,3 +56,4 @@ figmajsx/
 
 # exclude public assets
 public/
+!SECURITY.md
