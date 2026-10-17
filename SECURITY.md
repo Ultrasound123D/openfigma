@@ -11,8 +11,7 @@
 
 If you discover a security vulnerability in **OpenFigma**, please report it responsibly:
 
-- **Email:** xprimestudio26@gmail.com
-- Or use **GitHub Private Vulnerability Reporting**: Security tab → Report a vulnerability
+- Use **GitHub Private Vulnerability Reporting**: **Security tab → Report a vulnerability**
 
 **Please do NOT open a public issue for security vulnerabilities.**
 
