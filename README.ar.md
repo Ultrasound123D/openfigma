@@ -159,15 +159,24 @@ npm run build     # ينتج mcp-server/dist/index.js
 الوكيل سينفذ التسلسل تلقائياً:
 `list_projects → create_project → create_frame → create_text → update_element ...`
 
-### جميع أدوات MCP المتاحة (24)
+### جميع أدوات MCP المتاحة (52)
+
+> العدّ متحقق من الكود المصدري: 16 تسجيلاً مباشراً + 36 أداة يولّدها `makeCreateTool` / `toolAction` = **52 أداة**.
 
 | الفئة | الأدوات |
 |---|---|
-| 📂 المشاريع | `create_project` · `list_projects` · `get_project` · `delete_project` |
-| ✏️ إنشاء عناصر | `create_rectangle` · `create_ellipse` · `create_frame` · `create_line` · `create_polygon` · `create_star` · `create_arrow` · `create_text` |
-| 🔧 التحرير | `get_element` · `update_element` · `delete_element` · `list_elements` |
-| 📄 الصفحات | `list_pages` · `create_page` · `set_active_page` · `delete_page` |
-| 🧩 واجهات جاهزة | `draw_ui_card` · `draw_button` · `draw_phone_frame` |
+| 📂 المشاريع (4) | `create_project` · `list_projects` · `get_project` · `delete_project` |
+| ✏️ إنشاء عناصر (8) | `create_rectangle` · `create_ellipse` · `create_frame` · `create_line` · `create_polygon` · `create_star` · `create_arrow` · `create_text` |
+| 🔧 CRUD العناصر (4) | `get_element` · `update_element` · `delete_element` · `list_elements` |
+| 🔄 تحريك وترتيب (11) | `move_element` · `move_element_to` · `resize_element` · `rotate_element` · `duplicate_element` · `group_elements` · `ungroup_elements` · `bring_forward` · `send_backward` · `bring_to_front` · `send_to_back` |
+| 📐 محاذاة وتوزيع (2) | `align_elements` · `distribute_elements` |
+| 🎨 تنسيق (8) | `set_fill` · `set_stroke` · `set_corner_radius` · `set_opacity` · `set_blend_mode` · `add_shadow` · `flip_horizontal` · `flip_vertical` |
+| ✍️ نص (2) | `set_text_content` · `set_text_style` |
+| 🔒 إظهار وبيانات (3) | `set_visible` · `set_locked` · `rename_element` |
+| 🔍 استعلام (2) | `search_elements` · `get_all_elements` |
+| 🧹 اللوحة (1) | `clear_canvas` |
+| 📄 الصفحات (4) | `list_pages` · `create_page` · `set_active_page` · `delete_page` |
+| 🧩 واجهات جاهزة (3) | `draw_ui_card` · `draw_button` · `draw_phone_frame` |
 
 ### استكشاف أخطاء MCP
 
@@ -192,7 +201,7 @@ npm run build     # ينتج mcp-server/dist/index.js
 │                      snap-utils, storage, server-state, export)
 ├── src/store/         editor-store.ts (Zustand، ~2150 سطر)
 ├── src/data/          demo-design.ts (التصميم التجريبي)
-├── mcp-server/        خادم MCP (24 أداة) + config
+├── mcp-server/        خادم MCP (52 أداة) + config
 ├── prisma/            schema (اختياري)
 └── img/               sign.jpeg (صورة الغلاف)
 ```

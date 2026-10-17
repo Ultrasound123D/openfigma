@@ -159,15 +159,24 @@ and inside it a white card with a green "Sign in" button
 The agent will chain the tools automatically:
 `list_projects → create_project → create_frame → create_text → update_element ...`
 
-### All available MCP tools (24)
+### All available MCP tools (52)
+
+> Count verified from source: 16 direct registrations + 36 generated via `makeCreateTool` / `toolAction` helpers = **52 tools**.
 
 | Category | Tools |
 |---|---|
-| 📂 Projects | `create_project` · `list_projects` · `get_project` · `delete_project` |
-| ✏️ Create elements | `create_rectangle` · `create_ellipse` · `create_frame` · `create_line` · `create_polygon` · `create_star` · `create_arrow` · `create_text` |
-| 🔧 Edit | `get_element` · `update_element` · `delete_element` · `list_elements` |
-| 📄 Pages | `list_pages` · `create_page` · `set_active_page` · `delete_page` |
-| 🧩 Ready-made UI | `draw_ui_card` · `draw_button` · `draw_phone_frame` |
+| 📂 Projects (4) | `create_project` · `list_projects` · `get_project` · `delete_project` |
+| ✏️ Create elements (8) | `create_rectangle` · `create_ellipse` · `create_frame` · `create_line` · `create_polygon` · `create_star` · `create_arrow` · `create_text` |
+| 🔧 Element CRUD (4) | `get_element` · `update_element` · `delete_element` · `list_elements` |
+| 🔄 Transform & arrange (11) | `move_element` · `move_element_to` · `resize_element` · `rotate_element` · `duplicate_element` · `group_elements` · `ungroup_elements` · `bring_forward` · `send_backward` · `bring_to_front` · `send_to_back` |
+| 📐 Align & distribute (2) | `align_elements` · `distribute_elements` |
+| 🎨 Style (8) | `set_fill` · `set_stroke` · `set_corner_radius` · `set_opacity` · `set_blend_mode` · `add_shadow` · `flip_horizontal` · `flip_vertical` |
+| ✍️ Text (2) | `set_text_content` · `set_text_style` |
+| 🔒 Visibility & metadata (3) | `set_visible` · `set_locked` · `rename_element` |
+| 🔍 Query (2) | `search_elements` · `get_all_elements` |
+| 🧹 Canvas (1) | `clear_canvas` |
+| 📄 Pages (4) | `list_pages` · `create_page` · `set_active_page` · `delete_page` |
+| 🧩 Ready-made UI (3) | `draw_ui_card` · `draw_button` · `draw_phone_frame` |
 
 ### MCP troubleshooting
 
@@ -192,7 +201,7 @@ The agent will chain the tools automatically:
 │                      snap-utils, storage, server-state, export)
 ├── src/store/         editor-store.ts (Zustand, ~2150 lines)
 ├── src/data/          demo-design.ts (initial demo design)
-├── mcp-server/        MCP server (24 tools) + config
+├── mcp-server/        MCP server (52 tools) + config
 ├── prisma/            schema (optional)
 └── img/               sign.jpeg (cover image)
 ```
