@@ -2,130 +2,130 @@
   <img src="img/sign.jpeg" alt="OpenFigma" width="100%" />
 </p>
 
-# 🎨 OpenFigma — محرر تصميم متجهي يعمل في المتصفح
+# 🎨 OpenFigma — A Figma-Style Design Editor for the Browser
 
-**OpenFigma** (اسم مستودع: openfigma) هو استنساخ عملي لمحرر تصميم على طراز **Figma**، مبني بالكامل باستخدام **Next.js 16 + React 19 + TypeScript**، مع محرك رسم قائم على **SVG** وإدارة حالة عبر **Zustand**. المشروع جاهز للاستخدام الفوري: بدون قاعدة بيانات ثقيلة وبدون تعقيد نشر — شغّله وابدأ التصميم.
-
----
-
-## 📖 كيف بدأ المشروع
-
-بدأت الفكرة في ديسمبر 2025 كتجربة لفهم **كيف تعمل محررات التصميم الحقيقية من الداخل**:
-
-1. **الدرس من سيرفر فايغما الحقيقي** — تم حفظ ودراسة لقطة من واجهة موقع figma.com الفعلية (مجلد `figmajsx/` المرجعي: 128+ حزمة JS ~89MB، غير منشور في المستودع) لفهم بنية التطبيق الأصلي وأنماط عمله.
-2. **إعادة البناء النظيف** — بدلاً من التقليد الأعمى، أُعيد بناء كامل الميزات بأدوات مفتوحة: Next.js 16 وReact 19 بدل بنية واجهة فايغما الأصلية، وSVG بدل محرك WebGL/C++.
-3. **سجل قرارات معمارية موثق** — كل قرار (SVG مقابل WebGL، Zustand مقابل Redux، حفظ مزدوج...) مسجل في `WORKLOG.md` حسب التاريخ مع البدائل والتبريرات.
-4. **التحقق المنهجي** — تُختبر الميزات واحدة تلو الأخرى وتوثَّق حالة التحقق في `docs/PORTING_STATUS.md`: أكثر من 50 ميزة أساسية (تدوير، أدلة ذكية، عمليات منطقية، Auto Layout، مكونات، Undo/Redo...) وصلت إلى ✅ **مُتحقق 100%**.
+**OpenFigma** is a practical, production-shaped clone of a **Figma-like** vector design editor, built entirely with **Next.js 16 + React 19 + TypeScript**, an **SVG rendering engine**, and **Zustand** state management. Fully useable out of the box: no heavy database, no deploy complexity — run it and start designing.
 
 ---
 
-## 🧠 كيف يعمل المشروع (المعمارية)
+## 📖 How it started
+
+The idea began in December 2025 as an experiment to understand **how real design editors work from the inside**:
+
+1. **Deconstructing the original** — the way Figma behaves on the canvas was studied feature by feature: selection, snapping, guides, layout, history.
+2. **Clean rebuild with open tools** — instead of copying, every feature was rebuilt from scratch: Next.js + React instead of the original web stack, SVG instead of the C++/WebGL engine.
+3. **Documented architectural decisions** — every important trade-off (SVG vs WebGL, Zustand vs Redux, dual persistence...) was written down with alternatives and reasoning as it was made.
+4. **Methodical verification** — features are checked one by one against the original behavior: more than 50 core features (smart guides, boolean ops, auto-layout, components, undo/redo...) reached ✅ **100% verified**.
+
+---
+
+## 🧠 How it works (Architecture)
 
 ```
 ┌────────────────────────────────────────────────────┐
-│                    المتصفح                          │
+│                     Browser                        │
 │                                                    │
-│  EditorLayout (الهيكل)                             │
-│  ├── Toolbar        شريط الأدوات                    │
-│  ├── Canvas.tsx     لوحة SVG (زوم/بان/أدوات/تحديد)   │
-│  ├── LayerPanel     شجرة الطبقات                    │
-│  └── PropertiesPanel لوحة الخصائص                   │
+│  EditorLayout (shell)                              │
+│  ├── Toolbar          tool strip                   │
+│  ├── Canvas.tsx       SVG canvas (zoom/pan/tools)  │
+│  ├── LayerPanel       layer tree                   │
+│  └── PropertiesPanel  property inspector           │
 │            │                                       │
 │            ▼                                       │
 │  Zustand Store (editor-store.ts)                   │
-│  العناصر · الصفحات · التحديد · السجل · الحافظة        │
+│  elements · pages · selection · history · clipboard│
 │            │                                       │
 │            ▼                                       │
-│  منطق مجرد                                          │
+│  Pure logic                                        │
 │  element-utils · auto-layout · boolean-ops          │
 │  snap-utils · export · image-utils                 │
 │            │                                       │
 │            ▼                                       │
-│  الحفظ                                             │
-│  IndexedDB (تلقائي كل 30ث) + JSON على السيرفر        │
+│  Persistence                                       │
+│  IndexedDB (auto-save 30s) + JSON on server        │
 └────────────────────────────────────────────────────┘
         ▲
-        │ HTTP (25+ مسار API)
+        │  HTTP (25+ API routes)
         │
-   MCP Server ──── وكيل الذكاء الاصطناعي (Claude/Any)
+   MCP Server ──── AI agent (Claude / opencode / Cursor)
 ```
 
-### نموذج البيانات الأساسي
-كل شيء على اللوحة هو `DesignElement` — شجرة عناصر مرتبطة بـ `parentId`:
-- أنواعها: `rectangle, ellipse, text, line, polygon, star, arrow, frame, image, pen/mask, boolean`
-- خصائصها: موضع وحجم وتدوير، طبقات تعبئة (تدرجات/صور)، حدود، ظلال وضباب، شفافية ووضع مزج
-- الإطارات/المجموعات تضم أبناء، ومع Auto Layout يُعاد حساب التخطيط تلقائياً عند تغيّرهم
+### Core data model
+Everything on the canvas is a `DesignElement` — a tree linked by `parentId`:
+- **Types:** `rectangle, ellipse, text, line, polygon, star, arrow, frame, image, pen/mask, boolean`
+- **Properties:** position/size/rotation, fill layers (solid/gradient/image), strokes, shadows & blur, opacity, blend mode
+- Frames/groups hold children; with **Auto Layout** the layout recalculates automatically when children change
 
-### تدفق تفاعل المستخدم
-1. حدث المستخدم يلتقطه `Canvas.tsx` (ضغطة/سحب/كتابة)
-2. إن كان رسمًا: معاينة `<rect>` مباشرة، وعند الإفلات مرور بـ `addElement`
-3. إجراء على المخزن (70+ إجراء) يلمس `pushHistory` (نقطة تراجع)
-4. تحديث انتقائي عبر المحددات (selectors) — بدون إعادة رسم شامل
+### User interaction flow
+1. A user event is captured by `Canvas.tsx` (click / drag / type)
+2. While drawing: a live `<rect>` preview; on release it goes through `addElement`
+3. A store action runs (70+ actions) and calls `pushHistory` (undo point)
+4. Selective re-render via selectors — no full tree re-paint
 
-### أنظمة قابلة للاستخدام فوراً
-- **التعديل** تحديد مفرد/متعدد + مربع السحب، تحجيم المقابض الثمانية، تدوير 15° مع Shift، تكرار Alt+Drag
-- **الأدلة الذكية** خطوط محاذاة حمراء منقطة، لصق شبكي 6px، وقياس المسافات بـ Alt+Hover
-- **نص مضمّن** نقرة مزدوجة للتحرير داخل اللوحة
-- **عمليات منطقية** Union / Subtract / Intersect / Exclude على مسارات المتجهات
-- **Auto Layout** اتجاهات، فراغات، هامش داخلي، محاذاة وتحجيم
-- **مكونات وVariants** إنشاء/استنساخ/فصل، مع لوحات ألوان وخطوط المستند
-- **التصدير** PNG / SVG / PDF عبر `ExportPanel` أو API
-- **نظام صفحات** متعدد، ومصمم تفاعلات أولي (Prototype)، وتوليد كود CSS بتبويب Inspect
-- **تراجع/إعادة** سجل لقطات يُعبأ من 25+ موقع استدعاء
+### Ready-to-use feature set
+- **Editing** — single/multi select + rubber band, 8 resize handles, 15° rotation (Shift), Alt+Drag duplicate
+- **Smart guides** — red dashed alignment lines, 6px grid snap, Alt+Hover distance measurement
+- **Inline text** — double-click to edit text directly on the canvas
+- **Boolean ops** — Union / Subtract / Intersect / Exclude on vector paths
+- **Auto Layout** — direction, gap, padding, alignment, sizing modes
+- **Components & variants** — create/instance/detach, document colors and fonts panels
+- **Export** — PNG / SVG / PDF via `ExportPanel` or the API
+- **Multi-page system**, prototype interaction builder, CSS code generation in the Inspect tab
+- **Undo/Redo** — snapshot history pushed from 25+ call sites
 
-### طبقة الحفظ المزدوجة
-| المسار | ملف | الاستخدام |
+### Dual persistence layer
+| Path | File | Usage |
 |---|---|---|
-| المتصفح | `storage.ts` → IndexedDB | حفظ تلقائي كل 30 ثانية، يُستلم عند التحميل |
-| السيرفر | `server-state.ts` → `.design-data/<id>.json` | مصدر الحقيقة الواحد للـ API وخادم MCP |
+| Browser | `storage.ts` → IndexedDB | auto-save every 30s, loaded on start |
+| Server | `server-state.ts` → `.design-data/<id>.json` | single source of truth for API + MCP |
 
-نفس البيانات تمر عبر 8 مسارات Next.js App Router (`/api/designs`, `/api/export`, `/api/editor/projects/...`) — هذا ما يجعل المحرر قابلاً للتحكم برمجياً وذكائياً.
+The same data flows through 8 Next.js App Router API routes (`/api/designs`, `/api/export`, `/api/editor/projects/...`) — this is what makes the editor scriptable and AI-controllable.
 
 ---
 
-## 🚀 التشغيل محلياً
+## 🚀 Run locally
 
 ```bash
-npm install      # وحدة المشروع
-npm run dev      # سيرفر التطوير على http://localhost:3000
+npm install      # dependencies
+npm run dev      # dev server on http://localhost:3000
 ```
 
-- لا تحتاج أي إعداد قاعدة بيانات — البيانات الافتراضية مدمجة عبر `src/data/demo-design.ts`
-- عند أول زيارة يُحمّل تصميم تجريبي باسم "VidVerse" تلقائياً على اللوحة
+- No database setup needed — a demo design ("VidVerse") loads automatically on the first visit
+- Requires Node 18+
 
 ---
 
-## 🤖 ربط المشروع بـ MCP (بروتوكول سياق النموذج)
+## 🤖 Connecting the editor to MCP (Model Context Protocol)
 
-### ما هي MCP هنا؟
-خادم MCP جاهز للعمل يقع في `mcp-server/` ويتصل عبر **بروتوكول JSON-RPC على قناة stdio**.
-الوكيل الذكي (AI agent) يستهلكه عن بُعد: يرسل أوامر fetch إلى API السيرفر الذي يخلق/يعدل/يقرأ تصميمك.
+### What MCP means here
+The ready-to-run MCP server lives in `mcp-server/` and communicates over the **stdio JSON-RPC transport**.
+The AI agent consumes it and talks to the editor: it sends `fetch` calls to the server API, which creates / edits / reads your designs.
 
 ```
-وكيل الذكاء الاصطناعي (Claude Desktop / opencode / Cursor)
-        │  استدعاء أداة  مثال: create_rectangle({x:100,...})
+AI agent (Claude Desktop / opencode / Cursor)
+        │  tool call  e.g. create_rectangle({x:100,...})
         ▼
-MCP Server (mcp-server/dist/index.js عبر stdio)
+MCP Server (mcp-server/dist/index.js via stdio)
         │  fetch http://localhost:3000/api/...
         ▼
 API Routes (Next.js)  ──►  server-state.ts  ──►  .design-data/<id>.json
         │
         ▼
-التصميم يحدّث/يُخزن — والتطبيق يعرضه فوراً
+Design updated & saved — the app shows it live
 ```
 
-> ⚠️ يجب أن يكون سيرفر المحرر يعمل (`npm run dev`) على المنفذ 3000 — MCP يتحدث معه عبر HTTP.
+> ⚠️ The editor server must be running (`npm run dev`) on port 3000 — MCP talks to it over HTTP.
 
-### خطوة 1 — بناء خادم MCP
+### Step 1 — Build the MCP server
 ```bash
 cd mcp-server
 npm install
-npm run build     # ينتج mcp-server/dist/index.js
+npm run build     # produces mcp-server/dist/index.js
 ```
-> المستودع جاء معه `dist` مبني مسبقاً — قد لا تحتاج هذه الخطوة.
+> The repo ships with `dist` already built — you may skip this step.
 
-### خطوة 2 — تكوين الاتصال
-ملف `mcp-config.json` في جذر المشروع:
+### Step 2 — Configure the connection
+`mcp-config.json` at the project root:
 ```json
 {
   "mcpServers": {
@@ -137,66 +137,64 @@ npm run build     # ينتج mcp-server/dist/index.js
   }
 }
 ```
-عدّل `args` ليطابق مسار `dist/index.js` على جهازك، و`EDITOR_API_URL` إن كان السيرفر على منفذ/منفذ آخر.
+Adjust `args` to match your own `dist/index.js` path, and `EDITOR_API_URL` if the server runs on another port.
 
-### خطوة 3 — التسجيل حسب العميل
+### Step 3 — Register with your client
 
-| العميل | الملف | المكان |
+| Client | File | Location |
 |---|---|---|
-| **Claude Desktop** | `claude_desktop_config.json` | `%APPDATA%\Claude\` — ضع قسم `mcpServers` فوق |
-| **opencode** | `opencode.json` | في جذر المشروع: `"mcp": { "figma-editor": { "type": "local", "command": ["node", "...\\dist\\index.js"], "environment": { "EDITOR_API_URL": "http://localhost:3000" } } }` |
-| **Cursor** | `mcp.json` | `.cursor/mcp.json` في المشروع أو `~/.cursor/` |
-| **VS Code (Copilot)** | `mcp.json` | `.vscode/mcp.json` بنفس البنية أعلاه |
+| **Claude Desktop** | `claude_desktop_config.json` | `%APPDATA%\Claude\` — add the `mcpServers` block above |
+| **opencode** | `opencode.json` | project root: `"mcp": { "figma-editor": { "type": "local", "command": ["node", "...\\dist\\index.js"], "environment": { "EDITOR_API_URL": "http://localhost:3000" } } }` |
+| **Cursor** | `mcp.json` | `.cursor/mcp.json` in the project or `~/.cursor/` |
+| **VS Code (Copilot)** | `mcp.json` | `.vscode/mcp.json` using the same structure |
 
-بعد حفظ ملف التكوين **أعد فتح العميل** ليكتشف الأدوات.
+Save the config file, then **restart the client** so it discovers the tools.
 
-### خطوة 4 — مرر أول مهمة للذكاء الاصطناعي
-في شريط العميل اكتب مثل:
+### Step 4 — Give the AI its first task
+Type something like:
 ```
-أنشئ مشروعاً "Login UI" وفيه إطار رمادي اللون
-وبه زر «تسجيل» أخضر ينحصر داخل بطاقة بيضاء
+Create a project "Login UI" with a gray frame,
+and inside it a white card with a green "Sign in" button
 ```
-الوكيل سينفذ التسلسل تلقائياً:
+The agent will chain the tools automatically:
 `list_projects → create_project → create_frame → create_text → update_element ...`
 
-### جميع أدوات MCP المتاحة (24)
+### All available MCP tools (24)
 
-| الفئة | الأدوات |
+| Category | Tools |
 |---|---|
-| 📂 المشاريع | `create_project` · `list_projects` · `get_project` · `delete_project` |
-| ✏️ إنشاء عناصر | `create_rectangle` · `create_ellipse` · `create_frame` · `create_line` · `create_polygon` · `create_star` · `create_arrow` · `create_text` |
-| 🔧 التحرير | `get_element` · `update_element` · `delete_element` · `list_elements` |
-| 📄 الصفحات | `list_pages` · `create_page` · `set_active_page` · `delete_page` |
-| 🧩 واجهات جاهزة | `draw_ui_card` · `draw_button` · `draw_phone_frame` |
+| 📂 Projects | `create_project` · `list_projects` · `get_project` · `delete_project` |
+| ✏️ Create elements | `create_rectangle` · `create_ellipse` · `create_frame` · `create_line` · `create_polygon` · `create_star` · `create_arrow` · `create_text` |
+| 🔧 Edit | `get_element` · `update_element` · `delete_element` · `list_elements` |
+| 📄 Pages | `list_pages` · `create_page` · `set_active_page` · `delete_page` |
+| 🧩 Ready-made UI | `draw_ui_card` · `draw_button` · `draw_phone_frame` |
 
-### استكشاف أخطاء MCP
+### MCP troubleshooting
 
-| المشكلة | الحل |
+| Problem | Fix |
 |---|---|
-| الأدوات لا تظهر في العميل | جرّب `node mcp-server\dist\index.js` يدوياً — إن استمر معلقاً فالسيرفر سليم والمشكلة في تكوين العميل؛ أعد تشغيل العميل |
-| `fetch failed` في نتائج الأداة | سيرفر المحرر غير يعمل — `npm run dev` أولًا |
-| `EADDRINUSE :3000` | يوجد سيرفر قديم يعمل: أوقفه أو استخدم منفذاً آخر (`next dev -p 3001`) |
-| `project not found` | نفّذ `list_projects` وانسخ المعرف الصحيح |
-| مسار `dist` تغيّر بعد التعديل | عدّل مسار الملف في `mcp-config.json`/تكوين العميل |
+| Tools don't show in the client | Try `node mcp-server\dist\index.js` manually — if it stays alive the server is fine; fix the client config and restart it |
+| `fetch failed` in tool results | The editor server isn't running — start `npm run dev` first |
+| `EADDRINUSE :3000` | An old server is running: stop it or use another port (`next dev -p 3001`) |
+| `project not found` | Run `list_projects` and copy the correct id |
+| `dist` path changed | Update the path in `mcp-config.json` / client config |
 
 ---
 
-## 🗂️ بنية المشروع
+## 🗂️ Project structure
 
 ```
-├── src/app/           صفحة المحرر + 8 مسارات API
+├── src/app/           editor page + 8 API routes
 ├── src/components/
-│   ├── editor/        18 مكوّن محرر (Canvas, Toolbar, Panels...)
-│   └── ui/            48 مكوّن shadcn/ui
-├── src/lib/           المنطق (element-utils, auto-layout, boolean-ops,
+│   ├── editor/        18 editor components (Canvas, Toolbar, Panels...)
+│   └── ui/            48 shadcn/ui components
+├── src/lib/           engine logic (element-utils, auto-layout, boolean-ops,
 │                      snap-utils, storage, server-state, export)
-├── src/store/         editor-store.ts (Zustand، ~2150 سطر)
-├── src/data/          demo-design.ts (تصميم البداية)
-├── mcp-server/        خادم MCP (24 أداة) + config
-├── prisma/            schema (اختياري)
-├── docs/              PORTING_STATUS · DEVIATIONS · SYSTEM_MAP (محلي)
-├── WORKLOG.md         سجل القرارات المعمارية (محلي)
-└── img/               sign.jpeg (صورة الغلاف)
+├── src/store/         editor-store.ts (Zustand, ~2150 lines)
+├── src/data/          demo-design.ts (initial demo design)
+├── mcp-server/        MCP server (24 tools) + config
+├── prisma/            schema (optional)
+└── img/               sign.jpeg (cover image)
 ```
 
 ---

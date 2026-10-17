@@ -50,3 +50,6 @@ figmajsx/
 
 # but keep the main README
 !README.md
+
+# keep both language READMEs
+!README.ar.md
