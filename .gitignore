@@ -54,6 +54,15 @@ figmajsx/
 # keep both language READMEs
 !README.ar.md
 
+# keep port documentation (progress/worklog/plan/architecture/rules)
+!PROGRESS.md
+!WORKLOG.md
+!PORT-PLAN-*.md
+!ARCHITECTURE.md
+!PROJECT_ANALYSIS.md
+!RULES.md
+!docs/*.md
+
 # exclude public assets
 public/
 !SECURITY.md
