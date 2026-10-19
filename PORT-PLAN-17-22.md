@@ -64,7 +64,8 @@ evidence, not opinion.
   rendering path; PropertiesPanel Arc section (3 inputs) for ellipses —
   parity with `arcToolInputsUi3` + ratio input.
 
-### PHASE 18 — Vector edit mode
+### PHASE 18 — Vector edit mode ✅ DONE (2026-10-20)
+<!-- closed: parametric→vector conversion (exact bezier), Enter/dblclick entry, split-vector; see PROGRESS.md -->
 - Enter/exit (⌘+double-click / Enter / Esc), per-node `isVectorEditMode`.
 - Show vertices + tangent handles (segments store relative tangents already).
 - Drag vertex / drag handle (mirroring per existing `handleMirroring` semantics),

@@ -5,6 +5,8 @@ import { useEditorStore, generateId } from '@/store/editor-store'
 import type { DesignElement } from '@/store/editor-store'
 import { findElementInList, getVectorNetwork } from '@/lib/element-utils'
 import { isBooleanOperandType } from '@/lib/boolean-ops'
+// PHASE 18 — parametric shape → vector conversion on Enter
+import { isShapeToVectorCandidate } from '@/lib/shape-to-vector'
 import { toast } from '@/hooks/use-toast'
 import type { PenTool } from './use-pen-tool'
 import type { PathEditing } from './use-path-editing'
@@ -53,7 +55,7 @@ export function useCanvasKeyboard({
     finishPenPath, isPencilDrawing, setIsPencilDrawing,
     pencilPoints, setPencilPoints,
   } = pen
-  const { editingPathId, editingPointIndex, setEditingPointIndex, exitPathEditing } = pathEditing
+  const { editingPathId, editingPointIndex, setEditingPointIndex, exitPathEditing, setEditingPathId } = pathEditing
 
   // BRAKE: Block ALL browser shortcuts to make app feel native
   // This runs in capture phase and prevents Ctrl+key combos from reaching the browser
@@ -201,6 +203,24 @@ export function useCanvasKeyboard({
         e.preventDefault()
         finishPenPath()
         return
+      }
+
+      // PHASE 18 — Enter on a single selected parametric shape converts it
+      // and enters vector edit mode (Figma parity: isVectorEditMode entry).
+      if (e.key === 'Enter' && !editingPathId && activeTool === 'move') {
+        const sel = useEditorStore.getState().selectedElementIds
+        if (sel.length === 1) {
+          const el = findElementInList(useEditorStore.getState().elements, sel[0])
+          if (el && isShapeToVectorCandidate(el)) {
+            const ok = useEditorStore.getState().convertShapeToVector(el.id)
+            if (ok) {
+              e.preventDefault()
+              setEditingPathId(el.id)
+              setEditingPointIndex(null)
+              return
+            }
+          }
+        }
       }
 
       if (e.key === 'Escape') {

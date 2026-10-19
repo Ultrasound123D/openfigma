@@ -48,6 +48,7 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
     setElementAsMask,
     outlineStrokeSelection,
     flattenSelection,
+    splitVectorSelection,
   } = useEditorStore()
 
   const selectedElement = selectedElementIds.length === 1
@@ -186,6 +187,13 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
         if (n === 0) toast({ title: 'Nothing to flatten', description: 'Select a boolean group (live boolean result).', variant: 'destructive' })
         break
       }
+      // PHASE 18 — split vector network into paths (source: split_vector)
+      case 'split-vector': {
+        pushHistory()
+        const n = splitVectorSelection()
+        if (n === 0) toast({ title: 'Nothing to split', description: 'Select a multi-contour path (flatten / outline result).', variant: 'destructive' })
+        break
+      }
     }
   }
 
@@ -305,7 +313,8 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
             .filter((el): el is NonNullable<typeof el> => !!el)
           const outlineable = selected.filter((el) => isOutlineStrokeCandidate(el)).length > 0
           const flattenable = selected.some((el) => el.type === 'boolean')
-          if (!outlineable && !flattenable) return null
+          const splittable = selected.some((el) => el.type === 'path' && el.booleanContours && el.booleanContours.length > 1)
+          if (!outlineable && !flattenable && !splittable) return null
           return (
             <>
               <ContextMenuSeparator className="bg-[#3C3C3C]" />
@@ -317,6 +326,11 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
               {flattenable && (
                 <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('flatten')}>
                   Flatten
+                </ContextMenuItem>
+              )}
+              {splittable && (
+                <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('split-vector')}>
+                  Split Vector
                 </ContextMenuItem>
               )}
             </>

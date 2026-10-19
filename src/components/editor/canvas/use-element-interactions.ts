@@ -5,6 +5,8 @@ import { useEditorStore, generateId, createDefaultElement } from '@/store/editor
 import type { DesignElement } from '@/store/editor-store'
 import { calculateSnapLines, constrainToAngle, type SnapLine } from '@/lib/snap-utils'
 import { findElementInList, simplifyPath, smoothPointsToPathPoints, pathPointsToVectorNetwork, findAncestors } from '@/lib/element-utils'
+// PHASE 18 — parametric shape → vector conversion on edit-entry
+import { isShapeToVectorCandidate } from '@/lib/shape-to-vector'
 import { loadImageAsBase64, createImageElement, isImageFile } from '@/lib/image-utils'
 // PHASE 11 — uniform scale engine
 import { scaleElementBy } from '@/lib/scale-element'
@@ -1188,6 +1190,18 @@ export function useElementInteractions({ viewport, hitTest, pen, pathEditing }: 
         pathEditing.setEditingPathId(clickedEl.id)
         pathEditing.setEditingPointIndex(null)
         return
+      }
+
+      // PHASE 18 — vector edit on parametric shapes: double-click converts
+      // the shape to an editable vector (Figma parity: isVectorEditMode entry)
+      if (isShapeToVectorCandidate(clickedEl)) {
+        const st = useEditorStore.getState()
+        const ok = st.convertShapeToVector(clickedEl.id)
+        if (ok) {
+          pathEditing.setEditingPathId(clickedEl.id)
+          pathEditing.setEditingPointIndex(null)
+          return
+        }
       }
 
       // Inline text editing

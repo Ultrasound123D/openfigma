@@ -9,6 +9,8 @@ import {
   getBooleanGroupContours, booleanGroupPathD,
 } from '@/lib/boolean-ops'
 import { computeOutlineStroke, isOutlineStrokeCandidate } from '@/lib/outline-stroke'
+// PHASE 18 — parametric shape → editable vector conversion + split-vector
+import { shapeToVectorNetwork, isShapeToVectorCandidate } from '@/lib/shape-to-vector'
 import type { Poly } from '@/lib/polygon-clip'
 import type { Interaction, PrototypeAction, OverlayBackground } from '@/types/prototype'
 // PHASE 7 — style helpers (types are import()'d above to avoid a value cycle)
@@ -631,6 +633,14 @@ interface EditorState {
   /** PHASE 17 (P3) — bake selected live boolean groups into static path
    *  elements carrying booleanContours (source: FLATTEN_SELECTION). Returns count flattened. */
   flattenSelection: () => number
+  /** PHASE 18 (V5) — convert a parametric shape in place to an editable vector
+   *  path (source: isVectorEditMode — Figma converts the shape on edit-entry).
+   *  Returns the element id (still same id/slot) or null. */
+  convertShapeToVector: (id: string) => string | null
+  /** PHASE 18 — split multi-contour vector paths into separate path elements
+   *  (source: break-vector-network-into-paths / fullscreen_actions.split_vector).
+   *  Returns count of elements produced (0 = nothing eligible). */
+  splitVectorSelection: () => number
 
   // Actions - Page
   addPage: (name: string) => void
@@ -3283,6 +3293,60 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     })
     if (flattened > 0) set({ elements: next, isDirty: true })
     return flattened
+  },
+
+  // PHASE 18 (V5) — convert parametric shape → editable vector, in place.
+  convertShapeToVector: (id) => {
+    const el = findElementInList(get().elements, id)
+    if (!el || !isShapeToVectorCandidate(el)) return null
+    const net = shapeToVectorNetwork(el)
+    if (!net || !net.segments.length) return null
+    // Figma behavior: entering edit converts the shape; paint/transform/id kept.
+    get().updateElement(id, {
+      type: 'path',
+      vectorNetwork: net,
+      pathPoints: undefined,
+      pathClosed: net.closed,
+      arc: undefined,
+      sides: undefined,
+      innerRadius: undefined,
+      cornerRadius: 0,
+    } as Partial<DesignElement>)
+    return id
+  },
+
+  // PHASE 18 — split multi-contour paths (flatten/outline results) into
+  // separate path elements, one contour each.
+  splitVectorSelection: () => {
+    const r = get()
+    let produced = 0
+    const out: DesignElement[] = []
+    for (const el of r.elements) {
+      const selected = r.selectedElementIds.includes(el.id)
+      if (selected && el.type === 'path' && el.booleanContours && el.booleanContours.length > 1) {
+        for (const contour of el.booleanContours) {
+          if (!contour.vertices.length || !contour.segments.length) continue
+          out.push({
+            ...el,
+            id: generateId('path'),
+            booleanContours: undefined,
+            booleanOperation: undefined,
+            booleanSourceIds: undefined,
+            vectorNetwork: contour,
+            pathPoints: undefined,
+            pathClosed: contour.closed !== false,
+            children: undefined,
+          })
+          produced++
+        }
+      } else {
+        out.push(el)
+      }
+    }
+    if (produced > 0) {
+      set({ elements: out, isDirty: true })
+    }
+    return produced
   },
 
   // Guides
