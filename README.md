@@ -226,7 +226,7 @@ The agent will chain the tools automatically:
 │   ├── editor/        editor components + canvas/ hooks (Canvas, Toolbar, Panels,
 │   │                  prototype/ player + interactions, ExportPanel...)
 │   └── ui/            5 shadcn/ui components (in use)
-├── src/lib/           engine logic (element-utils, auto-layout, snap-utils, storage,
+├── src/lib/           engine logic (element-utils, auto-layout, boolean-ops, snap-utils, storage,
 │   │                  server-state, server-project, export, import/{image,svg,project},
 │   │                  prototype/{transitions,smart-animate}, events/bus)
 ├── src/types/         prototype.ts (Interaction model)

@@ -216,7 +216,7 @@ npm run build     # ينتج mcp-server/dist/index.js
 │   ├── editor/        مكوّنات المحرر + canvas/ hooks (Canvas، Toolbar، اللوحات،
 │   │                  مشغّل prototype/ وباني التفاعلات، ExportPanel...)
 │   └── ui/            5 مكوّنات shadcn/ui (المستخدمة فعلاً)
-├── src/lib/           منطق المحرك (element-utils, auto-layout, snap-utils, storage,
+├── src/lib/           منطق المحرك (element-utils, auto-layout, boolean-ops, snap-utils, storage,
 │   │                  server-state, server-project, export, import/{image,svg,project},
 │   │                  prototype/{transitions,smart-animate}, events/bus)
 ├── src/types/         prototype.ts (نموذج Interaction)
