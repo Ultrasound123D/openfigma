@@ -47,6 +47,8 @@ export const ELEMENT_FIELD_WHITELIST = [
   'textAlignVertical', 'listType', 'listIndent',
   // PHASE 15 — table model
   'tableData',
+  // PHASE 16 — corner smoothing
+  'cornerSmoothing',
 ] as const
 
 /** Pick only whitelisted keys from a raw body (defensive against injection). */

@@ -281,6 +281,9 @@ export interface DesignElement {
   cornerRadiusTR: number
   cornerRadiusBL: number
   cornerRadiusBR: number
+  /** PHASE 16 — corner smoothing 0..100% (source: cornerSmoothing 9 refs):
+   *  0 = circular corners, 100 = fully smooth (squircle-like bezier corners) */
+  cornerSmoothing?: number
   opacity: number
   rotation: number
   visible: boolean
@@ -395,6 +398,22 @@ export interface Page {
   name: string
   elements: DesignElement[]
   backgroundColor?: string
+}
+
+/** PHASE 16 — comment thread anchored to a canvas point. */
+export interface CommentMessage {
+  id: string
+  author: string
+  text: string
+  ts: number
+}
+export interface CommentPin {
+  id: string
+  /** anchor in page/canvas coordinates */
+  x: number
+  y: number
+  resolved: boolean
+  messages: CommentMessage[]
 }
 
 interface HistoryEntry {
@@ -616,6 +635,30 @@ interface EditorState {
   // Actions - Styles (PHASE 7) — see lib/styles.ts for the model
   /** All project styles (paint/text/effect) for the open document. */
   styles: import('@/lib/styles').ProjectStyle[]
+
+  // PHASE 16 — comments (source: comment tool in ToolType + Figma comment pins)
+  /** Comment pins on the current page (canvas coordinates). */
+  comments: CommentPin[]
+  /** Pin whose thread popover is open. */
+  activeCommentId: string | null
+  /** New-comment composer position (canvas coords) when open. */
+  composerPos: { x: number; y: number } | null
+  /** Create a pin with the first message. */
+  addComment: (x: number, y: number, text: string) => void
+  /** Append a reply to a thread. */
+  replyToComment: (commentId: string, text: string) => void
+  /** Toggle a thread's resolved state. */
+  toggleResolveComment: (commentId: string) => void
+  /** Delete a pin and its thread. */
+  deleteComment: (commentId: string) => void
+  /** Open/close the thread popover. */
+  setActiveCommentId: (commentId: string | null) => void
+  /** Open the new-comment composer at canvas coords. */
+  openComposer: (x: number, y: number) => void
+  /** Close the composer. */
+  closeComposer: () => void
+  /** Load comments (server load / import). */
+  loadComments: (comments: CommentPin[]) => void
   /** Create a style from the given slot of an element and attach it. */
   createStyleFromElement: (elementId: string, slot: import('@/lib/styles').StyleSlot, name: string) => string | null
   /** Apply a style to every currently selected element (where the slot applies). */
@@ -1337,6 +1380,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   rulerUnit: 'px' as 'px' | 'in' | 'cm' | 'mm',
   // PHASE 7 — project styles
   styles: [],
+  // PHASE 16 — comments
+  comments: [],
+  activeCommentId: null,
+  composerPos: null,
   guides: [],
   leftTab: 'file',
   rightTab: 'design',
@@ -1489,6 +1536,44 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   loadStyles: (styles) => set({ styles }),
+
+  // ---------- PHASE 16: comments ----------------------------------------
+  addComment: (x, y, text) =>
+    set((state) => ({
+      comments: [...state.comments, {
+        id: `cmt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        x, y, resolved: false,
+        messages: [{ id: `msg-${Date.now()}`, author: 'You', text, ts: Date.now() }],
+      }],
+      composerPos: null,
+      isDirty: true,
+    })),
+
+  replyToComment: (commentId, text) =>
+    set((state) => ({
+      comments: state.comments.map(c => c.id === commentId
+        ? { ...c, messages: [...c.messages, { id: `msg-${Date.now()}`, author: 'You', text, ts: Date.now() }] }
+        : c),
+      isDirty: true,
+    })),
+
+  toggleResolveComment: (commentId) =>
+    set((state) => ({
+      comments: state.comments.map(c => c.id === commentId ? { ...c, resolved: !c.resolved } : c),
+      isDirty: true,
+    })),
+
+  deleteComment: (commentId) =>
+    set((state) => ({
+      comments: state.comments.filter(c => c.id !== commentId),
+      activeCommentId: state.activeCommentId === commentId ? null : state.activeCommentId,
+      isDirty: true,
+    })),
+
+  setActiveCommentId: (commentId) => set({ activeCommentId: commentId }),
+  openComposer: (x, y) => set({ composerPos: { x, y }, activeCommentId: null }),
+  closeComposer: () => set({ composerPos: null }),
+  loadComments: (comments) => set({ comments: comments || [] }),
 
   // ---------- PHASE 8: layout grids -------------------------------------
   addLayoutGrid: (frameId, pattern) =>
@@ -2367,6 +2452,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         fileName: normalized.name,
         selectedElementIds: [],
         styles: (normalized.styles || []) as EditorState['styles'],
+        comments: (normalized.comments || []) as EditorState['comments'],
         history: [{ elements: deepCloneElements(normalized.activePageElements), selectedElementIds: [] }],
         historyIndex: 0,
         isDirty: false,

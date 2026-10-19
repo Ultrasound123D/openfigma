@@ -324,6 +324,12 @@ export function useElementInteractions({ viewport, hitTest, pen, pathEditing }: 
         return
       }
 
+      // PHASE 16 — comment tool: click opens the composer at that point
+      if (activeTool === 'comment') {
+        useEditorStore.getState().openComposer(Math.round(canvasPos.x), Math.round(canvasPos.y))
+        return
+      }
+
       if (activeTool === 'text') {
         const state = useEditorStore.getState()
         const id = generateId('text')

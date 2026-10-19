@@ -253,6 +253,16 @@ export function PrototypePlayer() {
     [runInteraction]
   )
 
+  // PHASE 16 — discrete mouse triggers (source: MOUSE_ENTER/LEAVE/DOWN/UP ×11)
+  const handleElementEvent = useCallback(
+    (el: DesignElement, kind: 'enter' | 'leave' | 'down' | 'up') => {
+      const map = { enter: 'mouse-enter', leave: 'mouse-leave', down: 'mouse-down', up: 'mouse-up' } as const
+      const ix = (el.interactions || []).find((i) => i.trigger.type === map[kind])
+      if (ix) runInteraction(ix)
+    },
+    [runInteraction]
+  )
+
   if (!isPreviewing) return null
 
   if (!currentFrame) {
@@ -308,6 +318,7 @@ export function PrototypePlayer() {
             interactive={overlayStack.length === 0}
             onElementPointerDown={handleElementPointerDown}
             onElementHover={handleElementHover}
+            onElementEvent={handleElementEvent}
             elementStyle={smartElementStyle}
           />
         </div>

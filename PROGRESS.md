@@ -19,8 +19,9 @@
 | PHASE 13 | نص متقدم: محاذاة عمودية top/middle/bottom + justified (توزيع كلمات فعلي) + قوائم ordered/unordered بمسافة بادئة معلّقة + إصلاح أمني (whitelist موحّد POST/PUT) | ✅ |
 | PHASE 14 | تدرجات كاملة: Angular (مخروطي بقطاعات فعلية) + Diamond (مقياس |dx|+|dy| رباعي الأرباع بدقة متجهية) + إصلاح خلل كامن في فهرسة أنماط التعبئة (العنصر الثاني بتدرج/صورة لم يكن يُرسم) | ✅ |
 | PHASE 15 | عناصر جديدة: Section (حاوية بتسمية علوية + children) + Table (نموذج صفوف/أعمدة/خلايا مع تحرير خلية بنقرة مزدوجة وإضافة/حذف صفوف/أعمدة ورأس مظلل) + Sticky (ملاحظة بزاوية مطوية) — أدوات + اختصارات Shift+S/T/N | ✅ |
+| PHASE 16 | الختام: نظام تعليقات كامل (دبابيس + خيوط + ردود + resolve + نقل عبر المشروع) + محفزات منفصلة mouse-enter/leave/down/up + Shift+1/0 تكبير + cornerSmoothing (منزلق + مسار بيزييه) + حزمة تسليم v0.4.0 | ✅ |
 
-> **المراحل 0 ← 15 مغلقة.** خطة النقل الكامل: PORT-PLAN-12-16.md (12✅ ← 16).
+> **المراحل 0 ← 16 كلها مغلقة — النقل الكامل مكتمل (12←16 فوق 0←11).** خطة النقل الكامل: PORT-PLAN-12-16.md (12✅ ← 16).
 
 ## سجل التحقق
 - Baseline (قبل PHASE 1): tsc ✅ / lint ✅ / build ✅
@@ -86,3 +87,12 @@
 - **أدوات**: Table/Sticky في قائمة المزيد بأدوات الأشكال (Shift+T/Shift+N) + Section في المجموعة الرئيسية + تسميات LayerPanel.
 - **النقل**: tableData في whitelist (round-trip مؤكد).
 - **التحقق**: tsc/eslint/build صفر. API: قسم بابن + جدول ببياناته + ملاحظة — كلها تُخزَّن وتُسترجع. حي: تسمية القسم y=-8 فوق الحدود والابن داخل، 9 نصوص خلايا + 4 خطوط شبكة + مستطيل رأس، bg+fold+نص الملاحظة، +عمود (cols 4, w 560, خلايا 4)، +صف (rows 4, h 176 = 44×4)، تحرير خلية $15، Shift+S يفعل أداة القسم، Table/Sticky في قائمة المزيد. VLM أكّد الثلاثة. لقطات: download/openfigma-p15-{elements,table-controls}.png
+
+## PHASE 16 — تفصيل التنفيذ والتحقق (2026-10-20)
+- **cornerSmoothing** (0-100%): lib/smooth-corners.ts يبني كل زاوية كبيزييه تكعيبية — معامل المقبض 0.5523 (قوس دائري تام) عند 0% يمتد حتى ~1.29 عند 100% (تقريب Figma squircle) — يُرسم كـ<path> للمستطيلات/الإطارات ذات أنصاف أقطار + منزلق في لوحة Corner Radius + whitelist.
+- **اختصارات التكبير**: Shift+1 ملاءمة الشاشة، Shift+0 تكبير 100%، Shift+2 تحديد (إضافة لموجود ⌘).
+- **محفزات منفصلة** (المصدر: MOUSE_ENTER/LEAVE/DOWN/UP ×11): أنواع mouse-enter/mouse-leave/mouse-down/mouse-up (hover يبقى كاسم قديم) + FrameRenderer يبث أحداث enter/leave/down/up عبر onElementEvent + المشغّل يفلتر المحفز المطابق + تسميات في منتقي المحفزات.
+- **نظام التعليقات**: CommentPin (id/x/y/resolved/messages) + إجراءات store (add/reply/toggleResolve/delete/setActive/openComposer/closeComposer/loadComments) + أداة comment تنقر لفتح مؤلف التعليق عند النقطة + دبابيس مرقمة (أزرق/أخضر للمحلول) + خيط منبثق (ردود + Resolve + Delete) + نقل كامل عبر PUT/GET المشروع (pushProjectToServer + normalizeServerProject + loadServerProject).
+- **التحقق**: tsc/eslint/build صفر. حي: مستطيل smoothing=80 يُرسم كمسار ببيزييه (C 123.44 0 160 36.56 160 32) بينما العادي يبقى <rect>، Shift+0 → 100%، أداة التعليق → مؤلف → نشر → دبوس برقم 1 → خيط → رد "Reply from teammate" → resolved=true، محفز mouse-enter يُخزَّن، تعليقات المشروع تُدرج في PUT/GET. VLM أكّد الفرق البصري للتنعيم. لقطات: download/openfigma-p16-{corner-smoothing,comments}.png
+
+> **النقل الكامل مكتمل** — المراحل 0←16: نظام تصميم UI3 + بروتوتايب + تصدير/استيراد + عمليات منطقية/أقنعة + أنماط + شبكات/مساطر + قيود + عمق نص ×2 + أدوات دقة + Auto Layout كامل + نص متقدم + تدرجات كاملة + Section/Table/Sticky + تعليقات/تنعيم/محفزات.

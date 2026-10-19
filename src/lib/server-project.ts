@@ -68,6 +68,8 @@ export interface NormalizedProject {
   name: string
   /** PHASE 7 — project styles (empty array when the server has none) */
   styles: unknown[]
+  /** PHASE 16 — comment threads (empty array when the server has none) */
+  comments: unknown[]
 }
 
 export function normalizeServerProject(project: any): NormalizedProject {
@@ -92,6 +94,8 @@ export function normalizeServerProject(project: any): NormalizedProject {
     activePageElements: converted,
     name: project.name || 'Untitled',
     styles: Array.isArray(project.styles) ? project.styles : [],
+    // PHASE 16 — comment threads pass through the project load
+    comments: Array.isArray(project.comments) ? project.comments : [],
   }
 }
 
@@ -114,6 +118,8 @@ export async function pushProjectToServer(state: {
   guides?: unknown[]
   /** PHASE 7 — project styles ride the whole-project PUT */
   styles?: unknown[]
+  /** PHASE 16 — comment threads ride the whole-project PUT */
+  comments?: unknown[]
 }): Promise<string | null> {
   if (!state.currentProjectId) return null
   try {
@@ -130,6 +136,7 @@ export async function pushProjectToServer(state: {
         activePageId: state.activePageId,
         ...(state.guides ? { guides: state.guides } : {}),
         ...(state.styles ? { styles: state.styles } : {}),
+        ...(state.comments ? { comments: state.comments } : {}),
       }),
     })
     if (!res.ok) return null

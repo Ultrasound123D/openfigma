@@ -21,6 +21,8 @@ import { FrameGrids } from './canvas/FrameGrids'
 import { measureText, measureLine, applyTextCase, buildTextLines } from '@/lib/text-measure'
 // PHASE 14 — angular (conic) + diamond gradient paints
 import { AngularPatternContent, DiamondPatternContent } from '@/lib/gradient-paints'
+// PHASE 16 — smoothed corner path (cornerSmoothing)
+import { smoothedRectPath } from '@/lib/smooth-corners'
 
 // Generate SVG defs for gradients, filters, clip paths, and image patterns
 function generateSVGDefs(elements: DesignElement[], zoom: number): React.ReactNode {
@@ -239,7 +241,32 @@ const CanvasElement = React.memo(function CanvasElement({
 
     switch (el.type) {
       case 'rectangle':
-      case 'frame':
+      case 'frame': {
+        // PHASE 16: smoothed corners render as a bezier path (cornerSmoothing > 0)
+        const hasRadius = (el.cornerRadius || el.cornerRadiusTL || el.cornerRadiusTR || el.cornerRadiusBL || el.cornerRadiusBR) > 0
+        if (el.cornerSmoothing && el.cornerSmoothing > 0 && hasRadius) {
+          return (
+            <path
+              d={smoothedRectPath({
+                width: el.width, height: el.height,
+                radius: el.cornerRadius,
+                tl: el.cornerRadiusTL || el.cornerRadius,
+                tr: el.cornerRadiusTR || el.cornerRadius,
+                bl: el.cornerRadiusBL || el.cornerRadius,
+                br: el.cornerRadiusBR || el.cornerRadius,
+                smoothing: el.cornerSmoothing,
+              })}
+              fill={fillAttr}
+              stroke={strokeAttr}
+              strokeWidth={el.strokeWidth}
+              strokeDasharray={strokeDasharray}
+              opacity={el.opacity / 100}
+              filter={filterAttr}
+              transform={transform}
+              style={style}
+            />
+          )
+        }
         return (
           <rect
             x={0} y={0} width={el.width} height={el.height}
@@ -255,6 +282,7 @@ const CanvasElement = React.memo(function CanvasElement({
             style={style}
           />
         )
+      }
       // PHASE 15 — section: container with a label rendered above its bounds
       case 'section': {
         return (
@@ -931,6 +959,10 @@ export function Canvas() {
   const zoom = useEditorStore((s) => s.zoom)
   const panX = useEditorStore((s) => s.panX)
   const panY = useEditorStore((s) => s.panY)
+  // PHASE 16 — comments
+  const comments = useEditorStore((s) => s.comments)
+  const activeCommentId = useEditorStore((s) => s.activeCommentId)
+  const composerPos = useEditorStore((s) => s.composerPos)
   const showGrid = useEditorStore((s) => s.showGrid)
   const gridSize = useEditorStore((s) => s.gridSize)
   // PHASE 8 — view options
@@ -1807,6 +1839,78 @@ export function Canvas() {
         />
       )}
 
+      {/* PHASE 16 — comment pins + composer + thread popover */}
+      {(() => {
+        const cx = containerSize.width / 2 + panX
+        const cy = containerSize.height / 2 + panY
+        const toScreen = (x: number, y: number) => ({ left: cx + x * zoom, top: cy + y * zoom })
+        const st = useEditorStore.getState()
+        return (
+          <>
+            {comments.map((c) => {
+              const pos = toScreen(c.x, c.y)
+              const isOpen = activeCommentId === c.id
+              const unread = c.messages.length
+              return (
+                <div key={c.id} className="absolute z-40" style={{ left: pos.left, top: pos.top }} data-testid={`comment-pin-${c.id}`}>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); st.setActiveCommentId(isOpen ? null : c.id) }}
+                    className={`flex items-center justify-center w-7 h-7 rounded-full border-2 shadow-md transition-transform hover:scale-110 ${c.resolved ? 'bg-[#14AE5C] border-[#0E8A47]' : 'bg-[#0D99FF] border-[#0B87E0]'}`}
+                    title={c.resolved ? 'Resolved thread' : 'Open thread'}
+                  >
+                    <span className="text-white text-[11px] font-bold">{unread}</span>
+                  </button>
+                  {isOpen && (
+                    <div
+                      className="absolute left-9 top-0 w-64 rounded-lg bg-[#2C2C2C] border border-[#383838] shadow-xl p-2 z-50"
+                      onClick={(e) => e.stopPropagation()}
+                      data-testid="comment-thread"
+                    >
+                      <div className="max-h-40 overflow-y-auto space-y-1.5 mb-2">
+                        {c.messages.map((m) => (
+                          <div key={m.id} className="bg-[#1E1E1E] rounded p-1.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-semibold text-[#0D99FF]">{m.author}</span>
+                              <span className="text-[9px] text-[#666]">{new Date(m.ts).toLocaleTimeString()}</span>
+                            </div>
+                            <div className="text-[11px] text-[#DDD] break-words">{m.text}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <CommentReplyInput commentId={c.id} />
+                      <div className="flex gap-1 mt-1.5">
+                        <button
+                          onClick={() => { st.toggleResolveComment(c.id) }}
+                          className={`flex-1 h-6 rounded text-[10px] ${c.resolved ? 'bg-[#14AE5C] text-white' : 'bg-[#1E1E1E] text-[#AAA] hover:bg-[#3C3C3C]'}`}
+                        >
+                          {c.resolved ? 'Resolved ✓' : 'Resolve'}
+                        </button>
+                        <button
+                          onClick={() => { st.deleteComment(c.id) }}
+                          className="flex-1 h-6 rounded text-[10px] bg-[#1E1E1E] text-[#F44336] hover:bg-[#3C3C3C]"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+            {composerPos && (
+              <div
+                className="absolute z-40 w-64 rounded-lg bg-[#2C2C2C] border border-[#383838] shadow-xl p-2"
+                style={{ left: toScreen(composerPos.x, composerPos.y).left + 14, top: toScreen(composerPos.x, composerPos.y).top - 14 }}
+                onClick={(e) => e.stopPropagation()}
+                data-testid="comment-composer"
+              >
+                <CommentComposerInput />
+              </div>
+            )}
+          </>
+        )
+      })()}
+
       {/* PHASE 15 — table cell editor overlay */}
       {editingTableCell && (() => {
         const el = findElementInList(elements, editingTableCell.elementId)
@@ -1877,6 +1981,60 @@ export function Canvas() {
         <span className="text-[10px] text-[#666] tabular-nums">
           Zoom: {Math.round(zoom * 100)}%
         </span>
+      </div>
+    </div>
+  )
+}
+
+/** PHASE 16 — reply input inside an open comment thread. */
+function CommentReplyInput({ commentId }: { commentId: string }) {
+  const [text, setText] = React.useState('')
+  const submit = () => {
+    const t = text.trim()
+    if (t) useEditorStore.getState().replyToComment(commentId, t)
+    setText('')
+  }
+  return (
+    <div className="flex gap-1">
+      <input
+        autoFocus
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') submit() }}
+        placeholder="Reply…"
+        className="flex-1 h-6 px-1.5 text-[11px] rounded bg-[#1E1E1E] border border-[#383838] text-[#DDD] outline-none focus:border-[#0D99FF]"
+        data-testid="comment-reply-input"
+      />
+      <button onClick={submit} className="h-6 px-2 rounded bg-[#0D99FF] text-white text-[10px]">Send</button>
+    </div>
+  )
+}
+
+/** PHASE 16 — new-comment composer (first message of a new pin). */
+function CommentComposerInput() {
+  const [text, setText] = React.useState('')
+  const composerPos = useEditorStore((s) => s.composerPos)
+  const submit = () => {
+    const t = text.trim()
+    if (t && composerPos) useEditorStore.getState().addComment(composerPos.x, composerPos.y, t)
+    else useEditorStore.getState().closeComposer()
+    setText('')
+  }
+  return (
+    <div className="space-y-1.5">
+      <textarea
+        autoFocus
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }}
+        placeholder="Add a comment… (Enter to post)"
+        rows={2}
+        className="w-full px-1.5 py-1 text-[11px] rounded bg-[#1E1E1E] border border-[#383838] text-[#DDD] outline-none focus:border-[#0D99FF] resize-none"
+        data-testid="comment-composer-input"
+      />
+      <div className="flex gap-1">
+        <button onClick={submit} className="flex-1 h-6 rounded bg-[#0D99FF] text-white text-[10px]" data-testid="comment-post">Post</button>
+        <button onClick={() => useEditorStore.getState().closeComposer()} className="flex-1 h-6 rounded bg-[#1E1E1E] text-[#AAA] text-[10px] hover:bg-[#3C3C3C]">Cancel</button>
       </div>
     </div>
   )

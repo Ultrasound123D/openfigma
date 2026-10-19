@@ -689,6 +689,23 @@ export function PropertiesPanel() {
                   <PropertyInput label="All" value={element.cornerRadius || 0} onChange={handleCornerRadiusChange} onBlur={pushHistory} />
                 </div>
               )}
+              {/* PHASE 16 — corner smoothing (source: cornerSmoothing 9 refs) */}
+              {(element.type === 'rectangle' || element.type === 'frame') && (
+                <div className="flex items-center gap-2 mt-1.5" data-testid="corner-smoothing">
+                  <span className="text-[10px] text-[#888] w-14 shrink-0">Smoothing</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={element.cornerSmoothing || 0}
+                    onChange={(e) => updateElement(element.id, { cornerSmoothing: parseInt(e.target.value) })}
+                    onMouseUp={pushHistory}
+                    onTouchEnd={pushHistory}
+                    className="flex-1 h-1 accent-[#0D99FF] cursor-pointer"
+                  />
+                  <span className="text-[10px] text-[#DDD] w-8 text-right tabular-nums">{element.cornerSmoothing || 0}%</span>
+                </div>
+              )}
             </div>
           )}
 

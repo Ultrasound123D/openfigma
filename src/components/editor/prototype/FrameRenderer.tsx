@@ -428,6 +428,7 @@ export function FrameRenderer({
   style,
   onElementPointerDown,
   onElementHover,
+  onElementEvent,
   interactive = false,
   elementStyle,
 }: {
@@ -436,8 +437,10 @@ export function FrameRenderer({
   style?: React.CSSProperties
   /** When interactive, elements with interactions get pointer handlers. */
   onElementPointerDown?: (el: DesignElement, e: React.PointerEvent) => void
-  /** Hover triggers (prototype player). */
+  /** Hover triggers (prototype player) — legacy. */
   onElementHover?: (el: DesignElement) => void
+  /** PHASE 16 — discrete mouse events for the separate triggers. */
+  onElementEvent?: (el: DesignElement, kind: 'enter' | 'leave' | 'down' | 'up', e: React.PointerEvent) => void
   interactive?: boolean
   /** Per-element inline style override (smart-animate tweens). */
   elementStyle?: (el: DesignElement) => React.CSSProperties | undefined
@@ -464,8 +467,10 @@ export function FrameRenderer({
             height={el.height}
             fill="transparent"
             style={{ cursor: 'pointer' }}
-            onPointerDown={(e) => onElementPointerDown(el, e)}
-            onPointerEnter={() => onElementHover?.(el)}
+            onPointerDown={(e) => { onElementEvent?.(el, 'down', e); onElementPointerDown(el, e) }}
+            onPointerUp={(e) => onElementEvent?.(el, 'up', e)}
+            onPointerEnter={(e) => { onElementEvent?.(el, 'enter', e); onElementHover?.(el) }}
+            onPointerLeave={(e) => onElementEvent?.(el, 'leave', e)}
           />
         )}
       </g>

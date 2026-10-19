@@ -15,7 +15,12 @@
  * unchanged, see RULES.md §9).
  */
 
-export type PrototypeTriggerType = 'click' | 'hover' | 'drag' | 'keypress' | 'delay'
+/**
+ * PHASE 16 — separate mouse triggers (source: MOUSE_ENTER / MOUSE_LEAVE /
+ * MOUSE_DOWN / MOUSE_UP ×11 each). 'hover' kept as a legacy alias that fires
+ * on enter like Figma's older hover trigger.
+ */
+export type PrototypeTriggerType = 'click' | 'hover' | 'drag' | 'keypress' | 'delay' | 'mouse-enter' | 'mouse-leave' | 'mouse-down' | 'mouse-up'
 
 export interface PrototypeTrigger {
   type: PrototypeTriggerType
@@ -97,10 +102,15 @@ export interface Interaction {
 /** Human labels shared by the interactions panel and the player HUD. */
 export const TRIGGER_LABELS: Record<PrototypeTriggerType, string> = {
   click: 'On click',
-  hover: 'On hover',
+  hover: 'On hover (enter, legacy)',
   drag: 'On drag',
   keypress: 'On keypress',
   delay: 'After delay',
+  // PHASE 16 — separate mouse triggers (source: MOUSE_* ×11 each)
+  'mouse-enter': 'On mouse enter',
+  'mouse-leave': 'On mouse leave',
+  'mouse-down': 'On mouse down',
+  'mouse-up': 'On mouse up',
 }
 
 export const ACTION_LABELS: Record<PrototypeActionType, string> = {

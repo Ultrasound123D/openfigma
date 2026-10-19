@@ -272,6 +272,11 @@ export function useCanvasKeyboard({
       // +/- without modifier for zoom
       if (!ctrl && !e.shiftKey && !e.altKey && e.key === '=') { state.setZoom(state.zoom + 0.1) }
       if (!ctrl && !e.shiftKey && !e.altKey && e.key === '-') { state.setZoom(state.zoom - 0.1) }
+      // PHASE 16 — Figma zoom shortcuts: Shift+1 zoom-to-fit, Shift+0 zoom 100%
+      // (Shift+2 zoom-to-selection exists below)
+      if (!ctrl && e.shiftKey && !e.altKey && (e.key === '1' || e.key === '!')) { e.preventDefault(); fitToScreen() }
+      if (!ctrl && e.shiftKey && !e.altKey && (e.key === '0' || e.key === ')')) { e.preventDefault(); state.setZoom(1) }
+      if (!ctrl && e.shiftKey && !e.altKey && (e.key === '2' || e.key === '@')) { e.preventDefault(); zoomToSelection() }
 
       // Page navigation (Ctrl+PageUp/PageDown like Figma)
       if (ctrl && e.key === 'PageUp') {
