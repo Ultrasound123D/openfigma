@@ -121,6 +121,57 @@ function Shape({ el }: { el: DesignElement }) {
     case 'rectangle':
     case 'frame':
       return <rect x={0} y={0} width={el.width} height={el.height} rx={el.cornerRadius || el.cornerRadiusTL || 0} ry={el.cornerRadius || el.cornerRadiusTL || 0} {...common} />
+    // PHASE 15 — section / table / sticky (prototype parity, simplified)
+    case 'section':
+      return (
+        <g>
+          <rect x={0} y={0} width={el.width} height={el.height} rx={el.cornerRadius || 0} {...common} />
+          <text x={2} y={-8} fontSize={14} fontWeight={600} fontFamily="Inter, system-ui, sans-serif" fill="#888888" style={{ pointerEvents: 'none', userSelect: 'none' }}>{el.name}</text>
+        </g>
+      )
+    case 'table': {
+      const td15 = el.tableData
+      if (!td15) return <rect x={0} y={0} width={el.width} height={el.height} {...common} />
+      const gs = el.stroke === 'transparent' ? '#383838' : el.stroke
+      const grid: React.ReactNode[] = []
+      let gx = 0
+      td15.colWidths.slice(0, -1).forEach((w, i) => { gx += w; grid.push(<line key={`c${i}`} x1={gx} y1={0} x2={gx} y2={el.height} stroke={gs} strokeWidth={1} />) })
+      let gy = 0
+      td15.rowHeights.slice(0, -1).forEach((h, i) => { gy += h; grid.push(<line key={`r${i}`} x1={0} y1={gy} x2={el.width} y2={gy} stroke={gs} strokeWidth={1} />) })
+      let ty = 0
+      const cellTexts: React.ReactNode[] = []
+      td15.rowHeights.forEach((rh, ri) => {
+        let tx = 0
+        td15.colWidths.forEach((cw, ci) => {
+          const t = td15.cells[ri]?.[ci] || ''
+          if (t) cellTexts.push(<text key={`t${ri}-${ci}`} x={tx + 8} y={ty + rh / 2 + 4} fontSize={12} fontFamily="Inter, system-ui, sans-serif" fill={el.textColor || '#DDD'} fontWeight={td15.headerRow && ri === 0 ? 600 : 400} style={{ pointerEvents: 'none', userSelect: 'none' }}>{t}</text>)
+          tx += cw
+        })
+        ty += rh
+      })
+      return (
+        <g>
+          <rect x={0} y={0} width={el.width} height={el.height} {...common} />
+          {td15.headerRow && td15.rowHeights[0] > 0 && <rect x={0} y={0} width={el.width} height={td15.rowHeights[0]} fill="#2C2C2C" opacity={0.9} />}
+          {grid}
+          {cellTexts}
+        </g>
+      )
+    }
+    case 'sticky': {
+      const fold15 = Math.min(28, el.width * 0.18, el.height * 0.18)
+      const lines15 = (el.textContent || '').split('\n')
+      const lineH15 = (el.fontSize || 14) * (el.lineHeight || 1.4)
+      return (
+        <g>
+          <rect x={0} y={0} width={el.width} height={el.height} rx={el.cornerRadius || 4} {...common} />
+          <path d={`M ${el.width - fold15} ${el.height} L ${el.width} ${el.height - fold15} L ${el.width} ${el.height} Z`} fill="#00000022" />
+          {lines15.map((l, i) => (
+            <text key={i} x={12} y={16 + i * lineH15} fontSize={el.fontSize || 14} fontFamily={el.fontFamily || 'Inter, system-ui, sans-serif'} fill={el.textColor || '#1E1E1E'} style={{ pointerEvents: 'none', userSelect: 'none' }}>{l}</text>
+          ))}
+        </g>
+      )
+    }
     case 'ellipse':
       return <ellipse cx={el.width / 2} cy={el.height / 2} rx={el.width / 2} ry={el.height / 2} {...common} />
     case 'line':
@@ -265,7 +316,7 @@ function TreeNode({
 }) {
   if (!el.visible) return null
 
-  const isContainer = (el.type === 'frame' || el.type === 'group' || el.type === 'component-set') && el.children?.length
+  const isContainer = (el.type === 'frame' || el.type === 'group' || el.type === 'section' || el.type === 'component-set') && el.children?.length
   let children = el.children
   if (el.type === 'frame' && hasAutoLayout(el) && el.children) {
     children = calculateAutoLayout(el)

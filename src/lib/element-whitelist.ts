@@ -45,6 +45,8 @@ export const ELEMENT_FIELD_WHITELIST = [
   'textAutoResize', 'textCase',
   // PHASE 13 — text depth: vertical align + lists
   'textAlignVertical', 'listType', 'listIndent',
+  // PHASE 15 — table model
+  'tableData',
 ] as const
 
 /** Pick only whitelisted keys from a raw body (defensive against injection). */

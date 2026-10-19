@@ -22,6 +22,9 @@ import {
   Move,
   MoreHorizontal,
   Scaling,
+  SquareDashed,
+  Table as TableIcon,
+  StickyNote,
 } from 'lucide-react'
 import { useEditorStore, ToolType } from '@/store/editor-store'
 // PHASE 8 — view options popup
@@ -47,6 +50,8 @@ const toolGroups: ToolGroup[] = [
     tools: [
       { type: 'move', icon: MousePointer2, label: 'Move', shortcut: 'V' },
       { type: 'frame', icon: Frame, label: 'Frame', shortcut: 'F' },
+      // PHASE 15 — section container (source: SECTION 116 refs)
+      { type: 'section', icon: SquareDashed, label: 'Section', shortcut: 'Shift+S' },
     ],
   },
   {
@@ -60,6 +65,9 @@ const toolGroups: ToolGroup[] = [
       { type: 'polygon', icon: Hexagon, label: 'Polygon', shortcut: 'Shift+R' },
       { type: 'star', icon: Star, label: 'Star', shortcut: 'Shift+O' },
       { type: 'arrow', icon: Move, label: 'Arrow', shortcut: 'Shift+L' },
+      // PHASE 15 — table + sticky (source: TABLE 58 / STICKY 52 refs)
+      { type: 'table', icon: TableIcon, label: 'Table', shortcut: 'Shift+T' },
+      { type: 'sticky', icon: StickyNote, label: 'Sticky note', shortcut: 'Shift+N' },
     ],
   },
   {

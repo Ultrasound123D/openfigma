@@ -50,7 +50,7 @@ function topLevelFrameOf(elements: DesignElement[], el: DesignElement): DesignEl
     for (const c of candidates) {
       if (c.id === el.id) return parent && parent.type === 'frame' ? parent : (c.type === 'frame' ? c : null)
       if (c.children) {
-        const found = walk(c.children, c.type === 'frame' || c.type === 'group' ? c : parent)
+        const found = walk(c.children, (c.type === 'frame' || c.type === 'group' || c.type === 'section') ? c : parent)
         if (found) return found
       }
     }

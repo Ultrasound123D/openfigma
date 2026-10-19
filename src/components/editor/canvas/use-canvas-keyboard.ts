@@ -339,6 +339,10 @@ export function useCanvasKeyboard({
         if (e.key === 'o' || e.key === 'O') state.setActiveTool('star')
         if (e.key === 'l' || e.key === 'L') state.setActiveTool('arrow')
         if (e.key === 'i' || e.key === 'I') state.setActiveTool('image')
+        // PHASE 15 — section / table / sticky (source: SECTION/TABLE/STICKY refs)
+        if (e.key === 's' || e.key === 'S') state.setActiveTool('section')
+        if (e.key === 't' || e.key === 'T') state.setActiveTool('table')
+        if (e.key === 'n' || e.key === 'N') state.setActiveTool('sticky')
       }
 
       // Toggle shortcuts

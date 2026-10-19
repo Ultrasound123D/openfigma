@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useRef, useState } from 'react'
-import { useEditorStore, generateId } from '@/store/editor-store'
+import { useEditorStore, generateId, createDefaultElement } from '@/store/editor-store'
 import type { DesignElement } from '@/store/editor-store'
 import { calculateSnapLines, constrainToAngle, type SnapLine } from '@/lib/snap-utils'
 import { findElementInList, simplifyPath, smoothPointsToPathPoints, pathPointsToVectorNetwork, findAncestors } from '@/lib/element-utils'
@@ -100,6 +100,8 @@ export function useElementInteractions({ viewport, hitTest, pen, pathEditing }: 
   const hiddenCanvasRef = useRef<HTMLCanvasElement | null>(null)
 
   const [editingTextId, setEditingTextId] = useState<string | null>(null)
+  // PHASE 15 — table cell being edited { elementId, row, col }
+  const [editingTableCell, setEditingTableCell] = useState<{ elementId: string; row: number; col: number } | null>(null)
   const [snapLines, setSnapLines] = useState<SnapLine[]>([])
   const [hoveredElementId, setHoveredElementId] = useState<string | null>(null)
   const elementCounterRef = useRef(0)
@@ -261,7 +263,7 @@ export function useElementInteractions({ viewport, hitTest, pen, pathEditing }: 
       const state = useEditorStore.getState()
       // Only handle double-click for move tool
       if (state.activeTool !== 'move') return
-      if (element.type === 'frame' || element.type === 'group') {
+      if ((element.type === 'frame' || element.type === 'group' || element.type === 'section')) {
         useEditorStore.getState().enterFrame(element.id)
       } else if (element.type === 'text') {
         setEditingTextId(element.id)
@@ -632,7 +634,7 @@ export function useElementInteractions({ viewport, hitTest, pen, pathEditing }: 
           let foundFrame: DesignElement | null = null
           for (let i = state.elements.length - 1; i >= 0; i--) {
             const el = state.elements[i]
-            if ((el.type === 'frame' || el.type === 'group') && !selectedElementIds.includes(el.id)) {
+            if (((el.type === 'frame' || el.type === 'group' || el.type === 'section')) && !selectedElementIds.includes(el.id)) {
               if (canvasPos.x >= el.x && canvasPos.x <= el.x + el.width &&
                   canvasPos.y >= el.y && canvasPos.y <= el.y + el.height) {
                 foundFrame = el
@@ -835,7 +837,7 @@ export function useElementInteractions({ viewport, hitTest, pen, pathEditing }: 
         if (dropTargetFrameId) {
           const state = useEditorStore.getState()
           const frame = findElementInList(state.elements, dropTargetFrameId)
-          if (frame && (frame.type === 'frame' || frame.type === 'group')) {
+          if (frame && ((frame.type === 'frame' || frame.type === 'group' || frame.type === 'section'))) {
             for (const id of state.selectedElementIds) {
               state.moveElementToFrame(id, dropTargetFrameId)
             }
@@ -1040,6 +1042,25 @@ export function useElementInteractions({ viewport, hitTest, pen, pathEditing }: 
               state.moveElementToFrame(newEl.id, parentFrame.id)
             }
             state.setSelectedElementIds([newEl.id])
+          } else if (activeTool === 'section' || activeTool === 'table' || activeTool === 'sticky') {
+            // PHASE 15 — section / table / sticky: store defaults + drag size
+            // (table size derives from tableData sums, not the drag)
+            elementCounterRef.current++
+            const d15 = createDefaultElement(activeTool)
+            const newEl: DesignElement = {
+              ...d15,
+              id: `${activeTool}-${Date.now()}`,
+              name: `${activeTool.charAt(0).toUpperCase() + activeTool.slice(1)} ${elementCounterRef.current}`,
+              x: Math.round(x), y: Math.round(y),
+              width: activeTool === 'table' ? (d15.tableData?.colWidths.reduce((a, b) => a + b, 0) || d15.width) : Math.round(width),
+              height: activeTool === 'table' ? (d15.tableData?.rowHeights.reduce((a, b) => a + b, 0) || d15.height) : Math.round(height),
+            }
+            state.addElement(newEl)
+            const parentFrame15 = findParentFrameAtPosition(x, y, [newEl.id])
+            if (parentFrame15 && parentFrame15.id !== currentFrameId) {
+              state.moveElementToFrame(newEl.id, parentFrame15.id)
+            }
+            state.setSelectedElementIds([newEl.id])
           } else {
             const defaults: Record<string, { fill: string; stroke: string; strokeWidth: number; sides?: number; innerRadius?: number }> = {
               rectangle: { fill: '#D9D9D9', stroke: 'transparent', strokeWidth: 0 },
@@ -1149,8 +1170,8 @@ export function useElementInteractions({ viewport, hitTest, pen, pathEditing }: 
       const clickedEl = findElementAtPosition(canvasPos.x, canvasPos.y)
 
       // Enter frame/group on double-click
-      if (!clickedEl || clickedEl.type === 'frame' || clickedEl.type === 'group') {
-        if (clickedEl && (clickedEl.type === 'frame' || clickedEl.type === 'group')) {
+      if (!clickedEl || clickedEl.type === 'frame' || clickedEl.type === 'group' || clickedEl.type === 'section') {
+        if (clickedEl && (clickedEl.type === 'frame' || clickedEl.type === 'group' || clickedEl.type === 'section')) {
           useEditorStore.getState().enterFrame(clickedEl.id)
         }
         return
@@ -1167,8 +1188,29 @@ export function useElementInteractions({ viewport, hitTest, pen, pathEditing }: 
       if (clickedEl.type === 'text') {
         setEditingTextId(clickedEl.id)
       }
+
+      // PHASE 15 — sticky notes edit their text like text elements
+      if (clickedEl.type === 'sticky') {
+        setEditingTextId(clickedEl.id)
+      }
+
+      // PHASE 15 — table cell editing: compute the cell under the pointer
+      // (local point within the table element → row/col)
+      if (clickedEl.type === 'table' && clickedEl.tableData) {
+        const ancestors = findAncestors(useEditorStore.getState().elements, clickedEl.id)
+        let ax = clickedEl.x, ay = clickedEl.y
+        for (const a of ancestors) { ax += a.x; ay += a.y }
+        const lx = canvasPos.x - ax
+        const ly = canvasPos.y - ay
+        const td15 = clickedEl.tableData
+        let col = 0, cxAcc = 0
+        for (let i = 0; i < td15.colWidths.length; i++) { cxAcc += td15.colWidths[i]; if (lx < cxAcc) { col = i; break } col = i }
+        let row = 0, ryAcc = 0
+        for (let i = 0; i < td15.rowHeights.length; i++) { ryAcc += td15.rowHeights[i]; if (ly < ryAcc) { row = i; break } row = i }
+        setEditingTableCell({ elementId: clickedEl.id, row, col })
+      }
     },
-    [screenToCanvas, findElementAtPosition, pathEditing]
+    [screenToCanvas, findElementAtPosition, pathEditing, setEditingTableCell]
   )
 
   // Handle file drop (PHASE 4: unified router — SVG → editable elements,
@@ -1230,6 +1272,8 @@ export function useElementInteractions({ viewport, hitTest, pen, pathEditing }: 
     eyedropperColor,
     setEyedropperColor,
     editingTextId,
+    editingTableCell,
+    setEditingTableCell,
     setEditingTextId,
     altHeld,
     setAltHeld,

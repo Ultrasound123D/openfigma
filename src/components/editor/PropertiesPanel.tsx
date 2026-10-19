@@ -188,7 +188,7 @@ const FRAME_PRESETS = [
 ]
 
 export function PropertiesPanel() {
-  const { elements, selectedElementIds, updateElement, alignElements, distributeElements, pushHistory, addFill, removeFill, updateFill, addStroke, removeStroke, updateStroke, setBlendMode, flipHorizontal, flipVertical, addComponent, detachInstance, resizeFrameWithConstraints, applyTextAutoSize } = useEditorStore()
+  const { elements, selectedElementIds, updateElement, alignElements, distributeElements, pushHistory, addFill, removeFill, updateFill, addStroke, removeStroke, updateStroke, setBlendMode, flipHorizontal, flipVertical, addComponent, detachInstance, resizeFrameWithConstraints, applyTextAutoSize, addTableRow, removeTableRow, addTableColumn, removeTableColumn, resizeTableColumn, resizeTableRow } = useEditorStore()
   const [aspectLocked, setAspectLocked] = useState(false)
   const [cornersLinked, setCornersLinked] = useState(true)
   const [showInspect, setShowInspect] = useState(false)
@@ -1135,7 +1135,7 @@ export function PropertiesPanel() {
             const hasParentFrame = (() => {
               const search = (els: DesignElement[]): boolean =>
                 els.some((e) =>
-                  (e.type === 'frame' || e.type === 'group') &&
+                  ((e.type === 'frame' || e.type === 'group' || e.type === 'section')) &&
                   (e.children?.some((c) => c.id === element.id) || (e.children ? search(e.children) : false))
                 )
               return search(elements)
@@ -1207,6 +1207,64 @@ export function PropertiesPanel() {
           </div>
             )
           })()}
+
+          {/* Table structure (PHASE 15 — source: TABLE 58 refs) */}
+          {element.type === 'table' && element.tableData && (
+            <div data-testid="table-controls">
+              <SectionHeader title="Table" />
+              <div className="flex items-center gap-1 mb-2">
+                <span className="text-[10px] text-[#888] w-10 shrink-0">Rows</span>
+                <span className="text-[11px] text-[#DDD] tabular-nums w-6">{element.tableData.rowHeights.length}</span>
+                <button onClick={() => { pushHistory(); addTableRow(element.id) }} className="h-6 px-2 rounded bg-[#1E1E1E] text-[#888] hover:bg-[#3C3C3C] text-[10px]" data-testid="add-row">+ Row</button>
+                <button onClick={() => { pushHistory(); removeTableRow(element.id) }} className="h-6 px-2 rounded bg-[#1E1E1E] text-[#888] hover:bg-[#3C3C3C] text-[10px]" data-testid="del-row">− Row</button>
+              </div>
+              <div className="flex items-center gap-1 mb-2">
+                <span className="text-[10px] text-[#888] w-10 shrink-0">Cols</span>
+                <span className="text-[11px] text-[#DDD] tabular-nums w-6">{element.tableData.colWidths.length}</span>
+                <button onClick={() => { pushHistory(); addTableColumn(element.id) }} className="h-6 px-2 rounded bg-[#1E1E1E] text-[#888] hover:bg-[#3C3C3C] text-[10px]" data-testid="add-col">+ Col</button>
+                <button onClick={() => { pushHistory(); removeTableColumn(element.id) }} className="h-6 px-2 rounded bg-[#1E1E1E] text-[#888] hover:bg-[#3C3C3C] text-[10px]" data-testid="del-col">− Col</button>
+              </div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[10px] text-[#888] w-10 shrink-0">Header</span>
+                <button
+                  onClick={() => { pushHistory(); updateElement(element.id, { tableData: { ...element.tableData!, headerRow: !element.tableData!.headerRow } }) }}
+                  className={`relative w-8 h-4 rounded-full transition-colors ${element.tableData.headerRow ? 'bg-[#0D99FF]' : 'bg-[#555]'}`}
+                >
+                  <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${element.tableData.headerRow ? 'left-4' : 'left-0.5'}`} />
+                </button>
+              </div>
+              {/* per-column widths + per-row heights */}
+              <div className="space-y-1 max-h-32 overflow-y-auto">
+                <div className="flex flex-wrap gap-1">
+                  {element.tableData.colWidths.map((w, i) => (
+                    <label key={`cw-${i}`} className="flex items-center gap-1">
+                      <span className="text-[9px] text-[#666]">C{i + 1}</span>
+                      <input
+                        type="text"
+                        value={w}
+                        onChange={(e) => { const n = parseInt(e.target.value); if (!isNaN(n)) resizeTableColumn(element.id, i, n) }}
+                        className="w-11 h-5 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF] tabular-nums"
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {element.tableData.rowHeights.map((h, i) => (
+                    <label key={`rh-${i}`} className="flex items-center gap-1">
+                      <span className="text-[9px] text-[#666]">R{i + 1}</span>
+                      <input
+                        type="text"
+                        value={h}
+                        onChange={(e) => { const n = parseInt(e.target.value); if (!isNaN(n)) resizeTableRow(element.id, i, n) }}
+                        className="w-11 h-5 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF] tabular-nums"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="text-[9px] text-[#666] mt-1">Double-click a cell on canvas to edit its text</div>
+            </div>
+          )}
 
           {/* Layout sizing (PHASE 12 — children of auto-layout frames).
               Source: layoutSizingHorizontal/layoutSizingVertical (FILL 81 / HUG 8 / FIXED 18)

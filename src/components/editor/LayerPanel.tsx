@@ -26,6 +26,10 @@ const typeLabels: Record<string, string> = {
   star: 'Star',
   boolean: 'Boolean',
   slice: 'Slice',
+  // PHASE 15
+  section: 'Section',
+  table: 'Table',
+  sticky: 'Sticky',
 }
 
 function getElementThumbnailColor(el: DesignElement): string {
@@ -351,7 +355,7 @@ function LayerItem({
       )}
 
       {/* Type label for Frame/Group */}
-      {(element.type === 'frame' || element.type === 'group') && !hasChildren && !isRenaming && (
+      {((element.type === 'frame' || element.type === 'group' || element.type === 'section')) && !hasChildren && !isRenaming && (
         <span className="text-[8px] text-[#555] mr-0.5 shrink-0 leading-none">
           {typeLabels[element.type] || ''}
         </span>

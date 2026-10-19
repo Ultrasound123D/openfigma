@@ -47,9 +47,9 @@ function generateClientId(): string {
   return `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-export type ToolType = 'move' | 'frame' | 'rectangle' | 'ellipse' | 'line' | 'pen' | 'text' | 'comment' | 'hand' | 'polygon' | 'star' | 'pencil' | 'eyedropper' | 'slice' | 'arrow' | 'image' | 'scale'
+export type ToolType = 'move' | 'frame' | 'rectangle' | 'ellipse' | 'line' | 'pen' | 'text' | 'comment' | 'hand' | 'polygon' | 'star' | 'pencil' | 'eyedropper' | 'slice' | 'arrow' | 'image' | 'scale' | 'section' | 'table' | 'sticky'
 
-export type ElementType = 'rectangle' | 'frame' | 'group' | 'ellipse' | 'line' | 'text' | 'path' | 'polygon' | 'star' | 'boolean' | 'slice' | 'arrow' | 'component-set'
+export type ElementType = 'rectangle' | 'frame' | 'group' | 'ellipse' | 'line' | 'text' | 'path' | 'polygon' | 'star' | 'boolean' | 'slice' | 'arrow' | 'component-set' | 'section' | 'table' | 'sticky'
 
 export interface PathPoint {
   x: number
@@ -378,6 +378,16 @@ export interface DesignElement {
   listType?: 'none' | 'ordered' | 'unordered'
   /** PHASE 13 — list indent before the bullet/number */
   listIndent?: number
+  /** PHASE 15 — table model (source: TABLE 58 refs). Grid of text cells with
+   *  per-column widths and per-row heights; width/height derive from the sums. */
+  tableData?: {
+    colWidths: number[]
+    rowHeights: number[]
+    /** cell texts [row][col] */
+    cells: string[][]
+    /** render first row as a header (tinted) */
+    headerRow?: boolean
+  }
 }
 
 export interface Page {
@@ -500,6 +510,14 @@ interface EditorState {
   syncAutoLayoutFrame: (frameId: string) => void
   /** PHASE 12 — reorder a child inside its parent (auto layout re-flows) */
   reorderChild: (frameId: string, childId: string, toIndex: number) => void
+  /** PHASE 15 — table cell / structure edits */
+  updateTableCell: (elementId: string, row: number, col: number, text: string) => void
+  addTableRow: (elementId: string, at?: number) => void
+  removeTableRow: (elementId: string, at?: number) => void
+  addTableColumn: (elementId: string, at?: number) => void
+  removeTableColumn: (elementId: string, at?: number) => void
+  resizeTableColumn: (elementId: string, col: number, width: number) => void
+  resizeTableRow: (elementId: string, row: number, height: number) => void
   moveElement: (id: string, dx: number, dy: number) => void
   addElement: (element: DesignElement) => void
   deleteElement: (id: string) => void
@@ -701,6 +719,11 @@ export function createDefaultElement(type: ElementType, overrides?: Partial<Desi
     arrow: { name: `Arrow ${elementCounter}`, fill: 'transparent', stroke: '#000000', strokeWidth: 2, cornerRadius: 0, arrowHeadStyle: 'arrow' },
     slice: { name: `Slice ${elementCounter}`, fill: 'transparent', stroke: '#0D99FF', strokeWidth: 1, cornerRadius: 0 },
     'component-set': { name: `Component Set ${elementCounter}`, fill: '#2C2C2C', stroke: '#A259FF', strokeWidth: 1, cornerRadius: 0, isComponentSet: true, isComponent: true },
+    // PHASE 15 — section / table / sticky (source: SECTION 116 / TABLE 58 / STICKY 52)
+    section: { name: `Section ${elementCounter}`, fill: '#B3D6F2', stroke: 'transparent', strokeWidth: 0, cornerRadius: 12, clipContent: false, width: 480, height: 360 },
+    table: { name: `Table ${elementCounter}`, fill: '#FFFFFF', stroke: '#383838', strokeWidth: 1, cornerRadius: 0, width: 420, height: 180,
+      tableData: { colWidths: [140, 140, 140], rowHeights: [44, 44, 44], cells: [['Header A', 'Header B', 'Header C'], ['', '', ''], ['', '', '']], headerRow: true } },
+    sticky: { name: `Sticky ${elementCounter}`, fill: '#F5D90A', stroke: 'transparent', strokeWidth: 0, cornerRadius: 4, width: 200, height: 160, textContent: 'Sticky note', fontFamily: 'Inter', fontSize: 14, fontWeight: 400, textAlign: 'left', textColor: '#1E1E1E', lineHeight: 1.4, letterSpacing: 0, textAlignVertical: 'top' },
   }
   
   const td = typeDefaults[type] || {}
@@ -1639,6 +1662,114 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }
     }),
 
+  // PHASE 15 — table actions: keep tableData consistent and re-derive width/height
+  updateTableCell: (elementId, row, col, text) =>
+    set((state) => {
+      const el = findElementInList(state.elements, elementId)
+      if (!el || !el.tableData) return state
+      const cells = el.tableData.cells.map((r, ri) => r.map((c, ci) => (ri === row && ci === col ? text : c)))
+      return {
+        elements: updateElementInList(state.elements, elementId, { tableData: { ...el.tableData, cells } }),
+        isDirty: true,
+      }
+    }),
+
+  addTableRow: (elementId, at) =>
+    set((state) => {
+      const el = findElementInList(state.elements, elementId)
+      if (!el || !el.tableData) return state
+      const cols = el.tableData.colWidths.length
+      const idx = at ?? el.tableData.rowHeights.length
+      const rowHeights = [...el.tableData.rowHeights]
+      rowHeights.splice(idx, 0, 44)
+      const cells = [...el.tableData.cells]
+      cells.splice(idx, 0, Array.from({ length: cols }, () => ''))
+      return {
+        elements: updateElementInList(state.elements, elementId, {
+          tableData: { ...el.tableData, rowHeights, cells },
+          height: rowHeights.reduce((a, b) => a + b, 0),
+        }),
+        isDirty: true,
+      }
+    }),
+
+  removeTableRow: (elementId, at) =>
+    set((state) => {
+      const el = findElementInList(state.elements, elementId)
+      if (!el || !el.tableData || el.tableData.rowHeights.length <= 1) return state
+      const idx = at ?? el.tableData.rowHeights.length - 1
+      const rowHeights = el.tableData.rowHeights.filter((_, i) => i !== idx)
+      const cells = el.tableData.cells.filter((_, i) => i !== idx)
+      return {
+        elements: updateElementInList(state.elements, elementId, {
+          tableData: { ...el.tableData, rowHeights, cells },
+          height: rowHeights.reduce((a, b) => a + b, 0),
+        }),
+        isDirty: true,
+      }
+    }),
+
+  addTableColumn: (elementId, at) =>
+    set((state) => {
+      const el = findElementInList(state.elements, elementId)
+      if (!el || !el.tableData) return state
+      const idx = at ?? el.tableData.colWidths.length
+      const colWidths = [...el.tableData.colWidths]
+      colWidths.splice(idx, 0, 140)
+      const cells = el.tableData.cells.map(r => { const nr = [...r]; nr.splice(idx, 0, ''); return nr })
+      return {
+        elements: updateElementInList(state.elements, elementId, {
+          tableData: { ...el.tableData, colWidths, cells },
+          width: colWidths.reduce((a, b) => a + b, 0),
+        }),
+        isDirty: true,
+      }
+    }),
+
+  removeTableColumn: (elementId, at) =>
+    set((state) => {
+      const el = findElementInList(state.elements, elementId)
+      if (!el || !el.tableData || el.tableData.colWidths.length <= 1) return state
+      const idx = at ?? el.tableData.colWidths.length - 1
+      const colWidths = el.tableData.colWidths.filter((_, i) => i !== idx)
+      const cells = el.tableData.cells.map(r => r.filter((_, i) => i !== idx))
+      return {
+        elements: updateElementInList(state.elements, elementId, {
+          tableData: { ...el.tableData, colWidths, cells },
+          width: colWidths.reduce((a, b) => a + b, 0),
+        }),
+        isDirty: true,
+      }
+    }),
+
+  resizeTableColumn: (elementId, col, width) =>
+    set((state) => {
+      const el = findElementInList(state.elements, elementId)
+      if (!el || !el.tableData || width < 20) return state
+      const colWidths = el.tableData.colWidths.map((w, i) => (i === col ? Math.round(width) : w))
+      return {
+        elements: updateElementInList(state.elements, elementId, {
+          tableData: { ...el.tableData, colWidths },
+          width: colWidths.reduce((a, b) => a + b, 0),
+        }),
+        isDirty: true,
+      }
+    }),
+
+  resizeTableRow: (elementId, row, height) =>
+    set((state) => {
+      const el = findElementInList(state.elements, elementId)
+      if (!el || !el.tableData || height < 20) return state
+      const rowHeights = el.tableData.rowHeights.map((h, i) => (i === row ? Math.round(height) : h))
+      return {
+        elements: updateElementInList(state.elements, elementId, {
+          tableData: { ...el.tableData, rowHeights },
+          height: rowHeights.reduce((a, b) => a + b, 0),
+        }),
+        isDirty: true,
+      }
+    }),
+
   setLeftTab: (tab) => set({ leftTab: tab }),
   setRightTab: (tab) => set({ rightTab: tab }),
   toggleLeftSidebar: () => set((state) => ({ leftSidebarVisible: !state.leftSidebarVisible })),
@@ -1658,7 +1789,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // If a frame is currently being edited, add element as a child of that frame
       if (state.currentFrameId) {
         const frame = findElementInList(state.elements, state.currentFrameId)
-        if (frame && (frame.type === 'frame' || frame.type === 'group')) {
+        if (frame && ((frame.type === 'frame' || frame.type === 'group' || frame.type === 'section'))) {
           const existingChildren = frame.children || []
           const relChild = {
             ...element,

@@ -143,7 +143,7 @@ function generateSVGDefs(elements: DesignElement[], zoom: number): React.ReactNo
 
   // Clip paths for frames
   for (const el of allEls) {
-    if ((el.type === 'frame' || el.type === 'group') && el.clipContent && el.children && el.children.length > 0) {
+    if (((el.type === 'frame' || el.type === 'group' || el.type === 'section')) && el.clipContent && el.children && el.children.length > 0) {
       defs.push(
         <clipPath key={`clip-${el.id}`} id={`clip-${el.id}`}>
           <rect x={0} y={0} width={el.width} height={el.height} rx={el.cornerRadius || 0} />
@@ -255,6 +255,135 @@ const CanvasElement = React.memo(function CanvasElement({
             style={style}
           />
         )
+      // PHASE 15 — section: container with a label rendered above its bounds
+      case 'section': {
+        return (
+          <g style={style}>
+            <rect
+              x={0} y={0} width={el.width} height={el.height}
+              fill={fillAttr}
+              stroke={strokeAttr}
+              strokeWidth={el.strokeWidth}
+              rx={el.cornerRadius || 0}
+              opacity={el.opacity / 100}
+              transform={transform}
+              data-section-bg={el.id}
+            />
+            {/* section label above the top-left corner (Figma: name above bounds) */}
+            <text
+              x={2}
+              y={-8}
+              fontSize={14}
+              fontWeight={600}
+              fontFamily="Inter, system-ui, sans-serif"
+              fill="#888888"
+              style={{ pointerEvents: 'none', userSelect: 'none' }}
+              data-section-label={el.id}
+            >
+              {el.name}
+            </text>
+          </g>
+        )
+      }
+      // PHASE 15 — table: grid of cells from tableData (borders + header tint + cell texts)
+      case 'table': {
+        const td = el.tableData
+        if (!td) {
+          return (
+            <rect x={0} y={0} width={el.width} height={el.height} fill={fillAttr} stroke={strokeAttr} strokeWidth={el.strokeWidth} opacity={el.opacity / 100} style={style} />
+          )
+        }
+        const gridStroke = el.stroke === 'transparent' ? '#383838' : el.stroke
+        const lines: React.ReactNode[] = []
+        const texts: React.ReactNode[] = []
+        let y = 0
+        td.rowHeights.forEach((rh, ri) => {
+          let x = 0
+          td.colWidths.forEach((cw, ci) => {
+            const cellText = td.cells[ri]?.[ci] || ''
+            if (cellText) {
+              texts.push(
+                <text
+                  key={`t-${ri}-${ci}`}
+                  x={x + 8}
+                  y={y + rh / 2 + 4}
+                  fontSize={12}
+                  fontFamily="Inter, system-ui, sans-serif"
+                  fill={el.textColor || '#DDDDDD'}
+                  fontWeight={td.headerRow && ri === 0 ? 600 : 400}
+                  style={{ pointerEvents: 'none', userSelect: 'none' }}
+                >
+                  {cellText}
+                </text>
+              )
+            }
+            x += cw
+          })
+          y += rh
+        })
+        // column separators
+        let cx2 = 0
+        td.colWidths.slice(0, -1).forEach((cw, ci) => {
+          cx2 += cw
+          lines.push(<line key={`c-${ci}`} x1={cx2} y1={0} x2={cx2} y2={el.height} stroke={gridStroke} strokeWidth={1} />)
+        })
+        // row separators
+        let cy2 = 0
+        td.rowHeights.slice(0, -1).forEach((rh, ri) => {
+          cy2 += rh
+          lines.push(<line key={`r-${ri}`} x1={0} y1={cy2} x2={el.width} y2={cy2} stroke={gridStroke} strokeWidth={1} />)
+        })
+        const headerH = td.headerRow ? td.rowHeights[0] : 0
+        return (
+          <g style={style} data-table={el.id}>
+            <rect x={0} y={0} width={el.width} height={el.height} fill={fillAttr} opacity={el.opacity / 100} />
+            {td.headerRow && headerH > 0 && (
+              <rect x={0} y={0} width={el.width} height={headerH} fill="#2C2C2C" opacity={0.9} />
+            )}
+            <rect x={0.5} y={0.5} width={el.width - 1} height={el.height - 1} fill="none" stroke={gridStroke} strokeWidth={1} />
+            {lines}
+            {texts}
+          </g>
+        )
+      }
+      // PHASE 15 — sticky note: colored card + folded corner + top-aligned text
+      case 'sticky': {
+        const fold = Math.min(28, el.width * 0.18, el.height * 0.18)
+        const stickyText = el.textContent || ''
+        const lines = stickyText.split('\n')
+        const lineH = (el.fontSize || 14) * (el.lineHeight || 1.4)
+        return (
+          <g style={style} opacity={el.opacity / 100}>
+            <rect
+              x={0} y={0} width={el.width} height={el.height}
+              fill={fillAttr}
+              rx={el.cornerRadius || 4}
+              transform={transform}
+              data-sticky-bg={el.id}
+            />
+            {/* folded corner (bottom-right) */}
+            <path
+              d={`M ${el.width - fold} ${el.height} L ${el.width} ${el.height - fold} L ${el.width} ${el.height} Z`}
+              fill="#00000022"
+              transform={transform}
+              data-sticky-fold={el.id}
+            />
+            {lines.map((l, i) => (
+              <text
+                key={i}
+                x={12}
+                y={16 + i * lineH}
+                fontSize={el.fontSize || 14}
+                fontFamily={el.fontFamily || 'Inter, system-ui, sans-serif'}
+                fill={el.textColor || '#1E1E1E'}
+                style={{ pointerEvents: 'none', userSelect: 'none' }}
+              >
+                {l}
+              </text>
+            ))}
+          </g>
+        )
+      }
       case 'ellipse':
         return (
           <ellipse
@@ -832,6 +961,7 @@ export function Canvas() {
   const {
     isDrawing, drawStart, drawCurrent, rubberBand, snapLines, hoveredElementId,
     dropTargetFrameId, eyedropperPos, eyedropperColor, editingTextId, setEditingTextId,
+    editingTableCell, setEditingTableCell,
     hiddenCanvasRef, isScaling, hoverDistances,
     handleElementMouseDown, handleElementDoubleClick, handleMouseDown, handleMouseMove,
     handleMouseUp, handleDoubleClick, handleDrop, handleDragOver, getCursor,
@@ -1162,7 +1292,7 @@ export function Canvas() {
           rx={el.cornerRadius ? el.cornerRadius / 4 : 0}
         />
         {/* Also highlight children of frames/groups when hovering */}
-        {(el.type === 'frame' || el.type === 'group') && el.children && el.children.map((child) => {
+        {((el.type === 'frame' || el.type === 'group' || el.type === 'section')) && el.children && el.children.map((child) => {
           if (!child.visible) return null
           return (
             <rect
@@ -1676,6 +1806,59 @@ export function Canvas() {
           onClose={() => setEditingTextId(null)}
         />
       )}
+
+      {/* PHASE 15 — table cell editor overlay */}
+      {editingTableCell && (() => {
+        const el = findElementInList(elements, editingTableCell.elementId)
+        if (!el || !el.tableData) return null
+        const ancestors: typeof elements = []
+        const walk = (list: typeof elements): boolean => {
+          for (const e of list) {
+            if (e.id === el.id) return true
+            if (e.children && walk(e.children)) { ancestors.push(e); return true }
+          }
+          return false
+        }
+        walk(elements)
+        let absX = el.x, absY = el.y
+        for (const a of ancestors) { absX += a.x; absY += a.y }
+        let cellX = 0
+        for (let i = 0; i < editingTableCell.col; i++) cellX += el.tableData.colWidths[i]
+        let cellY = 0
+        for (let i = 0; i < editingTableCell.row; i++) cellY += el.tableData.rowHeights[i]
+        const cellW = el.tableData.colWidths[editingTableCell.col] || 100
+        const cellH = el.tableData.rowHeights[editingTableCell.row] || 40
+        const cx = containerSize.width / 2 + panX
+        const cy = containerSize.height / 2 + panY
+        const screenX = cx + (absX + cellX) * zoom
+        const screenY = cy + (absY + cellY) * zoom
+        const { updateTableCell, pushHistory: pushH } = useEditorStore.getState()
+        const done = (input: HTMLInputElement | null) => {
+          if (input) updateTableCell(editingTableCell.elementId, editingTableCell.row, editingTableCell.col, input.value)
+          pushH()
+          setEditingTableCell(null)
+        }
+        return (
+          <input
+            autoFocus
+            defaultValue={el.tableData.cells[editingTableCell.row]?.[editingTableCell.col] || ''}
+            onBlur={(e) => done(e.currentTarget)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); done(e.currentTarget) }
+              if (e.key === 'Escape') { e.preventDefault(); setEditingTableCell(null) }
+            }}
+            className="absolute z-30 bg-white text-black text-[12px] px-1 outline-none border-2 border-[#0D99FF] rounded-sm"
+            style={{
+              left: screenX,
+              top: screenY,
+              width: Math.max(40, cellW * zoom),
+              height: Math.max(24, cellH * zoom),
+              fontFamily: 'Inter, system-ui, sans-serif',
+            }}
+            data-testid="table-cell-editor"
+          />
+        )
+      })()}
 
       {/* Hidden canvas for eyedropper */}
       <canvas ref={hiddenCanvasRef} className="hidden" />

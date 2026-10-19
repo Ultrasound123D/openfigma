@@ -18,8 +18,9 @@
 | PHASE 12 | Auto Layout كامل: WRAP + أحجام FIXED/HUG/FILL (إطار+أبناء) + min/max + محاذاة counter منفصلة + baseline + أبناء absolute + reorder-on-drop + لوحة UI بتعادل Figma | ✅ |
 | PHASE 13 | نص متقدم: محاذاة عمودية top/middle/bottom + justified (توزيع كلمات فعلي) + قوائم ordered/unordered بمسافة بادئة معلّقة + إصلاح أمني (whitelist موحّد POST/PUT) | ✅ |
 | PHASE 14 | تدرجات كاملة: Angular (مخروطي بقطاعات فعلية) + Diamond (مقياس |dx|+|dy| رباعي الأرباع بدقة متجهية) + إصلاح خلل كامن في فهرسة أنماط التعبئة (العنصر الثاني بتدرج/صورة لم يكن يُرسم) | ✅ |
+| PHASE 15 | عناصر جديدة: Section (حاوية بتسمية علوية + children) + Table (نموذج صفوف/أعمدة/خلايا مع تحرير خلية بنقرة مزدوجة وإضافة/حذف صفوف/أعمدة ورأس مظلل) + Sticky (ملاحظة بزاوية مطوية) — أدوات + اختصارات Shift+S/T/N | ✅ |
 
-> **المراحل 0 ← 14 مغلقة.** خطة النقل الكامل: PORT-PLAN-12-16.md (12✅ ← 16).
+> **المراحل 0 ← 15 مغلقة.** خطة النقل الكامل: PORT-PLAN-12-16.md (12✅ ← 16).
 
 ## سجل التحقق
 - Baseline (قبل PHASE 1): tsc ✅ / lint ✅ / build ✅
@@ -76,3 +77,12 @@
 - **إصلاح خلل كامن (كُشف بالتحقق الحي)**: معرّفات أنماط التدرج/الصورة كانت تستخدم عدّاداً شاملاً بينما getFillForElement يحلّ بفهرس التعبئة داخل مصفوفة fills — أي عنصر ثانٍ بتدرج/صورة كان يُرسم بلا تعبئة (مرجع لمعرّف غير موجود). أُصلح بفهرس لكل عنصر.
 - **إصلاح ثانٍ**: تدرجات userSpaceOnUse داخل أنماط objectBoundingBox لا تُحل في Chromium — استُبدلت بـobjectBoundingBox نسبةً لصندوق كل رُباع.
 - **التحقق**: tsc/eslint/build صفر. حي: نمط angular بـ30 قطاعاً (أول لون مُستوفى #ea4b29)، نمط diamond بأربعة مستطيلات + 4 تدرجات، كلا العنصرين بملء url(#grad-*-0) متطابق، تبديل النوع والزاوية يثبت. بكسلياً: مركز الماس (133,65,218) بنفسجي، الزاوية (239,208,25) أصفر (#F5D90A=(245,217,10)). VLM أكّد المربعين. لقطة: download/openfigma-p14-gradients.png
+
+## PHASE 15 — تفصيل التنفيذ والتحقق (2026-10-20)
+- **النموذج**: ElementType/ToolType += section/table/sticky + tableData (colWidths/rowHeights/cells/headerRow) + إجراءات store: updateTableCell/addTableRow/removeTableRow/addTableColumn/removeTableColumn/resizeTableColumn/resizeTableRow (كلها تُعيد اشتقاق width/height من مجاميع الأبعاد) + افتراضات الإنشاء (قسم أزرق فاتح 480×360 بزاوية 12، جدول 3×3 برأس، ملاحظة صفراء 200×160).
+- **Section**: حاوية كاملة — توسيع كل فحوصات frame/group (children/clip/drop-into/move-to/hit/نقل المشروع) لتشمل section + تسمية فوق الحدود + أيقونة SquareDashed بأداة رئيسية (Shift+S).
+- **Table**: رندر شبكي (خطوط أعمدة/صفوف + رأس مظلل + نصوص خلايا 12px) في Canvas وFrameRenderer + تحرير خلية بنقرة مزدوجة (حساب الصف/العمود من النقطة المحلية + محرر input فوق الخلية، Enter/blur يحفظ، Esc يلغي) + لوحة Table في Properties (عدادات + أزرار +/- صف/عمود + مفتاح Header + مدخلات عرض كل عمود وارتفاع كل صف).
+- **Sticky**: بطاقة ملونة بزاوية مطوية + نص أعلى-يسار + تحرير النص بنقرة مزدوجة عبر InlineTextEditor.
+- **أدوات**: Table/Sticky في قائمة المزيد بأدوات الأشكال (Shift+T/Shift+N) + Section في المجموعة الرئيسية + تسميات LayerPanel.
+- **النقل**: tableData في whitelist (round-trip مؤكد).
+- **التحقق**: tsc/eslint/build صفر. API: قسم بابن + جدول ببياناته + ملاحظة — كلها تُخزَّن وتُسترجع. حي: تسمية القسم y=-8 فوق الحدود والابن داخل، 9 نصوص خلايا + 4 خطوط شبكة + مستطيل رأس، bg+fold+نص الملاحظة، +عمود (cols 4, w 560, خلايا 4)، +صف (rows 4, h 176 = 44×4)، تحرير خلية $15، Shift+S يفعل أداة القسم، Table/Sticky في قائمة المزيد. VLM أكّد الثلاثة. لقطات: download/openfigma-p15-{elements,table-controls}.png
