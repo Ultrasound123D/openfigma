@@ -8,18 +8,67 @@
 
 ---
 
-## ✨ ما الجديد في v0.2.0
+## ✨ ما الجديد في v0.4.0 — النقل الكامل (المراحل 0–16)
 
-جولة تحصين من أربع مراحل قرّبت التطبيق من مطابقة واجهة Figma الإنتاجية:
+الموجة الأخيرة التي أغلقت النقل الكامل. فوق v0.2.0 (الرموز، البروتوتايب، التصدير، الاستيراد) وv0.3.0 (العمليات المنطقية/الأقنعة، الأنماط، شبكات التخطيط، القيود، النص، أدوات الدقة):
 
 | المرحلة | ما أُنجز |
 |---|---|
-| 1 — رموز التصميم v2 | نظام `--fig-*` كامل (سلالم ألوان، طباعة/استدارة/فراغات/ظلال UI3) + خطا Inter / Roboto Mono + أبعاد UI3 الدقيقة |
-| 2 — Prototype | نموذج تفاعلات كامل، محرك حركات، Smart Animate (مطابقة بالمسار الاسمي)، مشغّل ملء الشاشة، لوحة باني التفاعلات |
-| 3 — التصدير | خط موحّد: PNG / JPG / SVG / PDF / WEBP مع ضبط المقياس والجودة |
-| 4 — الاستيراد | منتقي صور، SVG ← شجرة عناصر قابلة للتحرير (DOMParser)، استيراد JSON مشروع (استبدال/دمج)، إفلات موحّد |
+| 12 — Auto Layout كامل | wrap، تحجيم FIXED/HUG/FILL للإطار **والأبناء** معًا، min/max، محاذاة baseline، أبناء absolute، إعادة ترتيب عند الإفلات، لوحة بمطابقة Figma |
+| 13 — عمق النص | محاذاة عمودية، justified بتوزيع الكلمات، قوائم مرتبة/غير مرتبة ببادئة معلّقة + whitelist موحّد لـ POST/PUT (إصلاح أمني) |
+| 14 — تدرجات كاملة | angular (قطاعات conic فعلية) + diamond (خطي 45° بكل ربع حسب \|dx\|+\|dy\| بدقة) + إصلاح خلل كامن في فهرسة fill-pattern |
+| 15 — عناصر جديدة | Section (حاوية كاملة)، Table (نموذج خلايا بتحرير بنقرة مزدوجة)، Sticky |
+| 16 — تعاون ولمسات | نظام تعليقات (دبابيس، خيوط، resolve)، تنعيم زوايا (بيزييه تكعيبية 0.5523 → 1.29)، محفزات mouse-enter/leave/down/up منفصلة، اختصارات التكبير Shift+1/0/2 |
 
-أُغلقت المراحل الأربع بـ `tsc --noEmit` + `eslint` + `next build` بصفر أخطاء (وفحص TypeScript على مستوى البناء أصبح مفروضاً في `next.config.ts`).
+أُغلقت كل المراحل بـ `tsc --noEmit` + `eslint` + `next build` بصفر أخطاء، مع تحقق حي في المتصفح ولقطات مؤكدة عبر VLM.
+
+---
+
+## 📸 لقطات
+
+لقطات منتقاة — مُتحقق منها حيًا في المتصفح ومؤكدة عبر VLM. الصور المهمة فقط في `img/`؛ المجموعة الكاملة مرحلةً بمرحلة (30 لقطة) في `download/`.
+
+**السطح اليومي**
+
+<p align="center">
+  <img src="img/editor.png" alt="المحرر" width="49%">
+  <img src="img/design-panel.png" alt="لوحة التصميم" width="49%">
+</p>
+
+**الطلاء والهندسة**
+
+<p align="center">
+  <img src="img/boolean-mask.png" alt="قناع منطقي" width="49%">
+  <img src="img/gradients.png" alt="تدرجات كاملة" width="49%">
+</p>
+
+**أنظمة التصميم**
+
+<p align="center">
+  <img src="img/styles.png" alt="الأنماط" width="49%">
+  <img src="img/layout-grids.png" alt="شبكات التخطيط" width="49%">
+</p>
+
+**محركات التخطيط**
+
+<p align="center">
+  <img src="img/constraints.png" alt="القيود" width="49%">
+  <img src="img/auto-layout.png" alt="Auto Layout" width="49%">
+</p>
+
+**المحتوى والتعاون**
+
+<p align="center">
+  <img src="img/text-justified.png" alt="نص justified" width="49%">
+  <img src="img/comments.png" alt="التعليقات" width="49%">
+</p>
+
+**البروتوتايب والعناصر الجديدة**
+
+<p align="center">
+  <img src="img/prototype.png" alt="البروتوتايب" width="49%">
+  <img src="img/section-table-sticky.png" alt="Section / Table / Sticky" width="49%">
+</p>
 
 ---
 
@@ -224,7 +273,7 @@ npm run build     # ينتج mcp-server/dist/index.js
 ├── src/data/          demo-design.ts (عرض VidVerse — من قائمة File)
 ├── mcp-server/        خادم MCP (52 أداة) + config
 ├── prisma/            schema (اختياري)
-└── img/               sign.jpeg (صورة الغلاف)
+└── img/               sign.jpeg (الغلاف) + 12 لقطة منتقاة
 ```
 
 ---

@@ -8,20 +8,67 @@
 
 ---
 
-## ✨ What's new in v0.3.0
+## ✨ What's new in v0.4.0 — complete port (phases 0–16)
 
-Phases 6–11 closed the remaining Figma-parity gaps. On top of v0.2.0 (tokens, prototype, export, import):
+Final wave closing the full port. On top of v0.2.0 (tokens, prototype, export, import) and v0.3.0 (boolean/masks, styles, layout grids, constraints, text, precision tools):
 
 | Phase | Delivered |
 |---|---|
-| 6 — Boolean & masks | Union/subtract/intersect/exclude (Greiner-Hormann clipping) + `isMask` frame masks |
-| 7 — Styles | Project-level paint / text / effect styles: create-from-selection, apply, detach, rename, live re-broadcast, usage counters, Styles panel in Assets |
-| 8 — Layout grids & view options | Per-frame Columns/Rows/Grid × Stretch/Center/Start/End/Min/Max, pixel grid (⌘', ≥400%), snap-to-pixels (⇧⌘'), layout-grid visibility (⌘\), View options popup, unit-aware rulers (px/in/cm/mm @ DPI 72) |
-| 9 — Constraints | left/center/right/left-right + top/center/bottom/top-bottom child behavior on frame resize (handles + numeric panel), auto-inference from creation position, Figma-style 9-box picker |
-| 10 — Text & paint depth | `textAutoResize` fixed/hug/grow with real canvas measurement + word wrap, `textCase` (upper/lower/title), strikethrough, image fill modes Fill/Fit/Crop (scale + offset) |
-| 11 — Precision tools | Scale tool (K) scaling geometry + fonts + corners + effects + auto-layout recursively, Deep select (⌘-click), alt+hover distance measurement |
+| 12 — Auto Layout (full) | wrap, FIXED/HUG/FILL sizing for frames **and** children, min/max, baseline alignment, absolute children, reorder-on-drop, Figma-parity panel |
+| 13 — Text depth | vertical align, justified word distribution, ordered/unordered lists with hanging indent + unified POST/PUT element whitelist (security fix) |
+| 14 — Full gradients | angular (real conic pie slices) + diamond (exact \|dx\|+\|dy\| per-quadrant 45° linear) + fix latent fill-pattern index bug |
+| 15 — New elements | Section (full container), Table (cell model with double-click editing), Sticky notes |
+| 16 — Collaboration & polish | comments system (pins, threads, resolve), corner smoothing (cubic Bézier 0.5523 → 1.29 squircle), separate mouse-enter/leave/down/up triggers, zoom shortcuts Shift+1/0/2 |
 
-All phases closed with `tsc --noEmit` + `eslint` + `next build` at zero errors, live browser verification and VLM-checked screenshots (`download/openfigma-p{6..11}-*.png`).
+All phases closed with `tsc --noEmit` + `eslint` + `next build` at zero errors, live browser verification and VLM-checked screenshots.
+
+---
+
+## 📸 Screenshots
+
+Curated captures — live-verified in the browser and VLM-checked. Only the significant ones live in `img/`; the full phase-by-phase set (30 shots) is in `download/`.
+
+**The everyday surface**
+
+<p align="center">
+  <img src="img/editor.png" alt="Editor" width="49%">
+  <img src="img/design-panel.png" alt="Design panel" width="49%">
+</p>
+
+**Paint & geometry**
+
+<p align="center">
+  <img src="img/boolean-mask.png" alt="Boolean mask" width="49%">
+  <img src="img/gradients.png" alt="Full gradients" width="49%">
+</p>
+
+**Design systems**
+
+<p align="center">
+  <img src="img/styles.png" alt="Styles" width="49%">
+  <img src="img/layout-grids.png" alt="Layout grids" width="49%">
+</p>
+
+**Layout engines**
+
+<p align="center">
+  <img src="img/constraints.png" alt="Constraints" width="49%">
+  <img src="img/auto-layout.png" alt="Auto Layout" width="49%">
+</p>
+
+**Content & collaboration**
+
+<p align="center">
+  <img src="img/text-justified.png" alt="Justified text" width="49%">
+  <img src="img/comments.png" alt="Comments" width="49%">
+</p>
+
+**Prototype & new elements**
+
+<p align="center">
+  <img src="img/prototype.png" alt="Prototype" width="49%">
+  <img src="img/section-table-sticky.png" alt="Section / Table / Sticky" width="49%">
+</p>
 
 ---
 
@@ -234,7 +281,7 @@ The agent will chain the tools automatically:
 ├── src/data/          demo-design.ts (VidVerse demo — via File menu)
 ├── mcp-server/        MCP server (52 tools) + config
 ├── prisma/            schema (optional)
-└── img/               sign.jpeg (cover image)
+└── img/               sign.jpeg (cover) + 12 curated screenshots
 ```
 
 ---
