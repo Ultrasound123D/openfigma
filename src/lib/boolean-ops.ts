@@ -224,3 +224,80 @@ export function foldElementPolys(operandPolys: Poly[][], op: BooleanOp): Poly[] 
   if (!norm.length) return { ok: false, reason: 'result is empty' }
   return norm
 }
+
+/* ============================================================
+ * PHASE 17 — live boolean group geometry (display + flatten share this).
+ * Latent PHASE 6 defect (proven live 2026-10-19, baseline script
+ * scripts/p17_baseline.sh): boolean groups rendered as a bbox rect with the
+ * first operand's fill — children invisible, no compositing anywhere
+ * (Canvas case 'boolean' hit the default rect branch; FrameRenderer has no
+ * 'boolean' case at all). Fix: bake the group's true geometry through the
+ * same Greiner-Hormann engine (foldElementPolys) and render THAT.
+ *
+ * Display model (documented decision): the result path is painted with the
+ * GROUP's own fill/stroke (which booleanOperation() sets from the backmost
+ * operand) — deterministic and identical to what flattenSelection() persists.
+ * Per-child paint compositing inside live boolean groups is UNKNOWN at
+ * minified-source level and is not modeled.
+ * ============================================================ */
+
+/** Recursively collect absolute Polys for one operand
+ *  (a plain shape, or a nested boolean group folded first). */
+function collectOperandPolys(el: DesignElement, absAncestor: { x: number; y: number }): Poly[] | null {
+  if (!el.visible) return null
+  if (el.type === 'boolean') {
+    const nested = foldGroupPolys(el)
+    if (!nested) return null
+    // nested group result is in the PARENT-of-nested coordinate space (canvas
+    // absolute when the nested group sits at top level); shift by absAncestor
+    // is not needed — foldGroupPolys returns absolute-to-canvas coords already.
+    return nested
+  }
+  return flattenOperand(el, absAncestor)
+}
+
+/** Fold a boolean group's children into absolute Polys (canvas space). null on failure. */
+function foldGroupPolys(group: DesignElement): Poly[] | null {
+  const op = group.booleanOperation as BooleanOp
+  if (!op || !group.children?.length) return null
+  const operandPolys: Poly[][] = []
+  for (const child of group.children) {
+    const polys = collectOperandPolys(child, { x: 0, y: 0 })
+    if (!polys) continue
+    operandPolys.push(polys)
+  }
+  if (!operandPolys.length) return null
+  const r = foldElementPolys(operandPolys, op)
+  if (!Array.isArray(r) || !r.length) return null
+  return r
+}
+
+const groupContoursCache = new WeakMap<object, VectorNetwork[] | null>()
+
+/**
+ * Baked geometry of a boolean group, as contours RELATIVE to the group's own
+ * x/y (ready for `<path>` inside the group's translate(g)). null when the
+ * group can't be folded (unsupported operand / degenerate geometry).
+ */
+export function getBooleanGroupContours(group: DesignElement): VectorNetwork[] | null {
+  if (group.type !== 'boolean') return null
+  const cached = groupContoursCache.get(group)
+  if (cached !== undefined) return cached
+  let out: VectorNetwork[] | null = null
+  const polys = foldGroupPolys(group)
+  if (polys && polys.length) {
+    const contours = polysToContours(polys, { x: group.x, y: group.y })
+    if (contours.length) out = contours
+  }
+  groupContoursCache.set(group, out)
+  return out
+}
+
+/** Concatenated multi-subpath `d` for a boolean group's baked geometry ('' if none). */
+export function booleanGroupPathD(group: DesignElement): string {
+  const contours = getBooleanGroupContours(group)
+  if (!contours) return ''
+  return contours
+    .map((net) => net.vertices.map((v, i) => `${i === 0 ? 'M' : 'L'} ${v.x} ${v.y}`).join(' ') + ' Z')
+    .join(' ')
+}

@@ -6,7 +6,9 @@ import { computeAutoLayout } from '@/lib/auto-layout'
 import { normalizeServerElement, normalizeServerProject } from '@/lib/server-project'
 import {
   isBooleanOperandType, flattenOperand, polysToContours, contoursBounds, foldElementPolys,
+  getBooleanGroupContours, booleanGroupPathD,
 } from '@/lib/boolean-ops'
+import { computeOutlineStroke, isOutlineStrokeCandidate } from '@/lib/outline-stroke'
 import type { Poly } from '@/lib/polygon-clip'
 import type { Interaction, PrototypeAction, OverlayBackground } from '@/types/prototype'
 // PHASE 7 — style helpers (types are import()'d above to avoid a value cycle)
@@ -23,6 +25,58 @@ import { measureText, buildTextLines } from '@/lib/text-measure'
  * ancestor chains of the given start ids (deepest first), writing positioned
  * children + hug frame sizes back into the tree. Pure data pass: no history.
  */
+/* ============================================================
+ * PHASE 17 helpers — outline stroke (P2) & flatten (P3).
+ * Module-level pure functions over DesignElement; the store actions
+ * (outlineStrokeSelection / flattenSelection) map the tree through them.
+ * ============================================================ */
+
+/** One element → outline-stroked replacement (same id/slot). null if unsupported. */
+function outlineOne(el: DesignElement): DesignElement | null {
+  if (!isOutlineStrokeCandidate(el)) return null
+  const r = computeOutlineStroke(el)
+  if (!r) return null
+  return {
+    ...el,
+    type: 'path',
+    // place at computed bounds (contours are relative to 0,0)
+    x: el.x + r.bounds.x,
+    y: el.y + r.bounds.y,
+    width: Math.max(1, r.bounds.width),
+    height: Math.max(1, r.bounds.height),
+    // band becomes the fill (Figma: outline result paints with the stroke color)
+    fill: el.stroke,
+    fills: el.fills?.length ? [{ ...el.fills[0], type: 'solid', color: el.stroke }] : undefined,
+    stroke: 'transparent',
+    strokeWidth: 0,
+    strokeStyle: 'solid',
+    booleanContours: r.contours,
+    booleanSourceIds: undefined,
+    booleanOperation: undefined,
+  }
+}
+
+/** One live boolean group → baked static path element (same id/slot). null on failure. */
+function flattenOne(group: DesignElement): DesignElement | null {
+  if (group.type !== 'boolean') return null
+  const contours = getBooleanGroupContours(group)
+  if (!contours?.length) return null
+  const b = contoursBounds(contours)
+  if (b.width <= 0 || b.height <= 0) return null
+  return {
+    ...group,
+    type: 'path',
+    x: group.x + b.x,
+    y: group.y + b.y,
+    width: b.width,
+    height: b.height,
+    booleanContours: contours,
+    booleanSourceIds: undefined,
+    booleanOperation: undefined,
+    children: undefined,
+  }
+}
+
 function applyAutoLayoutSync(elements: DesignElement[], startIds: string[]): DesignElement[] {
   let out = elements
   for (const startId of startIds) {
@@ -119,7 +173,10 @@ export interface GradientStop {
 }
 
 export interface FillStyle {
-  type: 'solid' | 'linear-gradient' | 'radial-gradient' | 'angular-gradient' | 'diamond-gradient' | 'image'
+  /** PHASE 17 + 'pattern' — image tile repeat (source: addPaintOfType +
+   *  <pattern patternUnits="userSpaceOnUse"><image …/> rendering, 9456/3835).
+   *  Tile size = image natural size × patternScale (default 1). */
+  type: 'solid' | 'linear-gradient' | 'radial-gradient' | 'angular-gradient' | 'diamond-gradient' | 'image' | 'pattern'
   color: string
   opacity: number
   gradientStops?: GradientStop[]
@@ -137,6 +194,12 @@ export interface FillStyle {
   scale?: number
   offsetX?: number
   offsetY?: number
+  /** PHASE 17 — pattern paint: tile = natural image size × patternScale.
+   *  patternW/H: measured natural dimensions (async Image() probe, stored so
+   *  rendering is deterministic without re-measuring). */
+  patternScale?: number
+  patternW?: number
+  patternH?: number
 }
 
 export interface StrokeStyle {
@@ -391,6 +454,10 @@ export interface DesignElement {
     /** render first row as a header (tinted) */
     headerRow?: boolean
   }
+  /** PHASE 17 — ellipse arc (source: transform_panel arcToolStart/Sweep/Ratio).
+   *  start: degrees (0 = 3 o'clock, cw positive); sweep: degrees extent;
+   *  innerRatio: 0..1 (0 = pie, >0 = donut). See lib/arc.ts. */
+  arc?: import('@/lib/arc').EllipseArc
 }
 
 export interface Page {
@@ -558,7 +625,13 @@ interface EditorState {
   // Actions - Boolean ops & masks (PHASE 6)
   applyBooleanOperation: (op: 'union' | 'subtract' | 'intersect' | 'exclude') => { ok: boolean; reason?: string; id?: string }
   setElementAsMask: (id: string, isMask: boolean) => void
-  
+  /** PHASE 17 (P2) — convert each selected stroked shape into a filled outline
+   *  path (source: OUTLINE_STROKE=233). Returns count converted. */
+  outlineStrokeSelection: () => number
+  /** PHASE 17 (P3) — bake selected live boolean groups into static path
+   *  elements carrying booleanContours (source: FLATTEN_SELECTION). Returns count flattened. */
+  flattenSelection: () => number
+
   // Actions - Page
   addPage: (name: string) => void
   deletePage: (id: string) => void
@@ -3172,6 +3245,45 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         isDirty: true,
       }
     }),
+
+  // PHASE 17 (P2) — outline stroke (source: OUTLINE_STROKE=233 / "outline-stroke").
+  // Converts each selected stroked shape into a filled outline path element
+  // (booleanContours, evenodd). Paint: original stroke color; stroke removed.
+  outlineStrokeSelection: () => {
+    const r = get()
+    let converted = 0
+    const next = r.elements.map(function walk(el: DesignElement): DesignElement {
+      if (r.selectedElementIds.includes(el.id)) {
+        const out = outlineOne(el)
+        if (out) { converted++; return out }
+      }
+      if (el.children?.length) {
+        return { ...el, children: el.children.map(walk) }
+      }
+      return el
+    })
+    if (converted > 0) set({ elements: next, isDirty: true })
+    return converted
+  },
+
+  // PHASE 17 (P3) — flatten (source: FLATTEN_SELECTION / "flatten-selection").
+  // Bakes each selected live boolean group into a static path element.
+  flattenSelection: () => {
+    const r = get()
+    let flattened = 0
+    const next = r.elements.map(function walk(el: DesignElement): DesignElement {
+      if (el.type === 'boolean' && r.selectedElementIds.includes(el.id)) {
+        const out = flattenOne(el)
+        if (out) { flattened++; return out }
+      }
+      if (el.children?.length) {
+        return { ...el, children: el.children.map(walk) }
+      }
+      return el
+    })
+    if (flattened > 0) set({ elements: next, isDirty: true })
+    return flattened
+  },
 
   // Guides
   addGuide: (guide) => set((state) => ({ guides: [...state.guides, guide], isDirty: true })),

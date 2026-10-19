@@ -15,6 +15,7 @@ import {
 import { useEditorStore } from '@/store/editor-store'
 import { findElementInList } from '@/lib/element-utils'
 import { isBooleanOperandType } from '@/lib/boolean-ops'
+import { isOutlineStrokeCandidate } from '@/lib/outline-stroke'
 import { toast } from '@/hooks/use-toast'
 
 interface CanvasContextMenuProps {
@@ -45,6 +46,8 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
     elements,
     applyBooleanOperation,
     setElementAsMask,
+    outlineStrokeSelection,
+    flattenSelection,
   } = useEditorStore()
 
   const selectedElement = selectedElementIds.length === 1
@@ -169,6 +172,20 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
         }
         break
       }
+      // PHASE 17 (P2) — outline stroke (source: OUTLINE_STROKE=233)
+      case 'outline-stroke': {
+        pushHistory()
+        const n = outlineStrokeSelection()
+        if (n === 0) toast({ title: 'Nothing to outline', description: 'Select shapes with a visible stroke.', variant: 'destructive' })
+        break
+      }
+      // PHASE 17 (P3) — flatten (source: FLATTEN_SELECTION)
+      case 'flatten': {
+        pushHistory()
+        const n = flattenSelection()
+        if (n === 0) toast({ title: 'Nothing to flatten', description: 'Select a boolean group (live boolean result).', variant: 'destructive' })
+        break
+      }
     }
   }
 
@@ -279,6 +296,32 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
             </ContextMenuItem>
           </>
         )}
+
+        {/* PHASE 17: outline stroke + flatten (source: OUTLINE_STROKE=233 /
+            FLATTEN_SELECTION; gated on real eligibility) */}
+        {hasSelection && (() => {
+          const selected = selectedElementIds
+            .map((id) => findElementInList(elements, id))
+            .filter((el): el is NonNullable<typeof el> => !!el)
+          const outlineable = selected.filter((el) => isOutlineStrokeCandidate(el)).length > 0
+          const flattenable = selected.some((el) => el.type === 'boolean')
+          if (!outlineable && !flattenable) return null
+          return (
+            <>
+              <ContextMenuSeparator className="bg-[#3C3C3C]" />
+              {outlineable && (
+                <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('outline-stroke')}>
+                  Outline Stroke
+                </ContextMenuItem>
+              )}
+              {flattenable && (
+                <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('flatten')}>
+                  Flatten
+                </ContextMenuItem>
+              )}
+            </>
+          )
+        })()}
 
         {/* Z-order */}
         {hasSelection && (

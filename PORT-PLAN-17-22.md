@@ -48,7 +48,8 @@ evidence, not opinion.
 
 ## Phase scopes (each: extraction → compare → implement → tsc/eslint/build → live+VLM → 3 docs → push)
 
-### PHASE 17 — Paint & vector commands
+### PHASE 17 — Paint & vector commands ✅ DONE (2026-10-20)
+<!-- closed: pattern paint + outline stroke + flatten + arc + live-boolean display fix; see PROGRESS.md -->
 - **P1 Pattern paint**: new paint type `pattern` on fills (image + tile repeat,
   CSS `background-repeat` semantics; source's AI generation is figmake-only —
   documented out of scope). SVG `<pattern>` fill + picker entry + panel preview.

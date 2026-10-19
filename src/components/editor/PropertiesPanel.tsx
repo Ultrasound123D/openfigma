@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useCallback, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import {
   AlignHorizontalSpaceAround,
   AlignVerticalSpaceAround,
@@ -329,6 +329,7 @@ export function PropertiesPanel() {
   const isFrame = element.type === 'frame'
   const isStar = element.type === 'star'
   const isPolygon = element.type === 'polygon'
+  const isEllipse = element.type === 'ellipse'
 
   // Generate CSS for inspect panel
   const generateCSS = () => {
@@ -946,6 +947,52 @@ export function PropertiesPanel() {
             </div>
           )}
 
+          {/* PHASE 17 — Arc tool (ellipse): Start / Sweep / Ratio
+              (source: transform_panel arcToolStart / arcToolSweep / arcToolRatio) */}
+          {isEllipse && (
+            <div>
+              <SectionHeader title="Arc" />
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-[#888] w-14 shrink-0">Start</span>
+                  <input type="range" min={-360} max={360} step={1} value={element.arc?.start ?? 0}
+                    onChange={(e) => updateElement(element.id, { arc: { start: parseFloat(e.target.value), sweep: element.arc?.sweep ?? 90, innerRatio: element.arc?.innerRatio ?? 0 } })}
+                    className="flex-1 h-1 accent-[#0D99FF] cursor-pointer" />
+                  <input type="text" value={element.arc?.start ?? 0}
+                    onChange={(e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) updateElement(element.id, { arc: { start: n, sweep: element.arc?.sweep ?? 90, innerRatio: element.arc?.innerRatio ?? 0 } }) }}
+                    className="w-10 h-6 px-1 text-[11px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] text-center focus:outline-none focus:border-[#0D99FF] tabular-nums" title="Start angle (deg)" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-[#888] w-14 shrink-0">Sweep</span>
+                  <input type="range" min={-360} max={720} step={1} value={element.arc?.sweep ?? 90}
+                    onChange={(e) => updateElement(element.id, { arc: { start: element.arc?.start ?? 0, sweep: parseFloat(e.target.value), innerRatio: element.arc?.innerRatio ?? 0 } })}
+                    className="flex-1 h-1 accent-[#0D99FF] cursor-pointer" />
+                  <input type="text" value={element.arc?.sweep ?? 90}
+                    onChange={(e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) updateElement(element.id, { arc: { start: element.arc?.start ?? 0, sweep: n, innerRatio: element.arc?.innerRatio ?? 0 } }) }}
+                    className="w-10 h-6 px-1 text-[11px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] text-center focus:outline-none focus:border-[#0D99FF] tabular-nums" title="Sweep (deg; ±360+ = full)" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-[#888] w-14 shrink-0">Ratio</span>
+                  <input type="range" min={0} max={100} value={Math.round((element.arc?.innerRatio ?? 0) * 100)}
+                    onChange={(e) => updateElement(element.id, { arc: { start: element.arc?.start ?? 0, sweep: element.arc?.sweep ?? 90, innerRatio: parseFloat(e.target.value) / 100 } })}
+                    className="flex-1 h-1 accent-[#0D99FF] cursor-pointer" />
+                  <input type="text" value={Math.round((element.arc?.innerRatio ?? 0) * 100)}
+                    onChange={(e) => { const n = parseInt(e.target.value); if (!isNaN(n) && n >= 0 && n <= 100) updateElement(element.id, { arc: { start: element.arc?.start ?? 0, sweep: element.arc?.sweep ?? 90, innerRatio: n / 100 } }) }}
+                    className="w-10 h-6 px-1 text-[11px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] text-center focus:outline-none focus:border-[#0D99FF] tabular-nums" title="Inner radius ratio 0–100% (0 = pie, >0 = donut)" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => updateElement(element.id, { arc: { start: 0, sweep: 360, innerRatio: 0 } })}
+                    className="h-5 px-2 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#AAA] hover:text-[#FFF] hover:border-[#0D99FF]"
+                  >
+                    Full ellipse
+                  </button>
+                  <span className="text-[9px] text-[#666]">{element.arc ? `renders as ${Math.abs(element.arc.sweep) >= 360 && element.arc.innerRatio > 0 ? 'donut' : 'pie/arc'}` : 'no arc'}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Polygon/Star properties */}
           {(isPolygon || isStar) && (
             <div>
@@ -1375,6 +1422,8 @@ function FillLayerItem({ elementId, fill, index }: { elementId: string; fill: Fi
           <option value="radial-gradient">Radial</option>
           <option value="angular-gradient">Angular</option>
           <option value="diamond-gradient">Diamond</option>
+          <option value="image">Image</option>
+          <option value="pattern">Pattern</option>
         </select>
         {fill.type === 'solid' ? (
           <input
@@ -1382,6 +1431,12 @@ function FillLayerItem({ elementId, fill, index }: { elementId: string; fill: Fi
             value={fill.color}
             onChange={(e) => updateFill(elementId, index, { color: e.target.value })}
             className="w-6 h-5 rounded border border-[#555] cursor-pointer bg-transparent"
+          />
+        ) : fill.type === 'pattern' ? (
+          <span
+            className="w-6 h-5 rounded border border-[#555] overflow-hidden"
+            style={{ background: fill.imageUrl ? `url(${fill.imageUrl}) center/cover` : 'repeating-linear-gradient(45deg, #333 0 4px, #222 4px 8px)' }}
+            title="Pattern fill"
           />
         ) : (
           <button
@@ -1443,8 +1498,62 @@ function FillLayerItem({ elementId, fill, index }: { elementId: string; fill: Fi
           )}
         </div>
       )}
+      {/* PHASE 17 — pattern paint: image URL + auto-measured tile + scale.
+          (source: addPaintOfType pattern option; rendering = SVG <pattern
+          userSpaceOnUse> tile = natural size × scale). */}
+      {fill.type === 'pattern' && (
+        <div className="mt-1.5 space-y-1">
+          <div className="flex items-center gap-1">
+            <span className="text-[9px] text-[#888] w-8 shrink-0">URL</span>
+            <input
+              type="text"
+              value={fill.imageUrl || ''}
+              placeholder="https://… or data:image/…"
+              onChange={(e) => updateFill(elementId, index, { imageUrl: e.target.value })}
+              className="flex-1 h-5 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF]"
+            />
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-[9px] text-[#888] w-8 shrink-0">Tile</span>
+            <input
+              type="number" step={0.1} min={0.1}
+              value={fill.patternScale ?? 1}
+              onChange={(e) => { const n = parseFloat(e.target.value); if (!isNaN(n) && n > 0) updateFill(elementId, index, { patternScale: n }) }}
+              className="w-12 h-5 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] text-center focus:outline-none focus:border-[#0D99FF] tabular-nums"
+              title="Tile scale (× natural image size)"
+            />
+            <span className="text-[9px] text-[#666]">
+              {fill.patternW && fill.patternH
+                ? `${Math.round(fill.patternW * (fill.patternScale ?? 1))}×${Math.round(fill.patternH * (fill.patternScale ?? 1))}px`
+                : fill.imageUrl ? 'measuring…' : 'no image'}
+            </span>
+          </div>
+          <PatternMeasure fill={fill} elementId={elementId} index={index} />
+        </div>
+      )}
     </div>
   )
+}
+
+/** PHASE 17 — auto-measure the pattern tile's natural size (async Image probe)
+ *  and persist patternW/patternH on the fill. No-op once measured. */
+function PatternMeasure({ fill, elementId, index }: { fill: FillStyle; elementId: string; index: number }) {
+  const updateFill = useEditorStore((s) => s.updateFill)
+  const { imageUrl, patternW, patternH, type } = fill
+  useEffect(() => {
+    if (type !== 'pattern' || !imageUrl || patternW || patternH) return
+    let alive = true
+    const img = new Image()
+    img.onload = () => {
+      if (!alive) return
+      if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+        updateFill(elementId, index, { patternW: img.naturalWidth, patternH: img.naturalHeight })
+      }
+    }
+    img.src = imageUrl
+    return () => { alive = false }
+  }, [type, imageUrl, patternW, patternH, elementId, index, updateFill])
+  return null
 }
 
 // Stroke layer item

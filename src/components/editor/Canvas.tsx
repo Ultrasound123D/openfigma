@@ -23,6 +23,9 @@ import { measureText, measureLine, applyTextCase, buildTextLines } from '@/lib/t
 import { AngularPatternContent, DiamondPatternContent } from '@/lib/gradient-paints'
 // PHASE 16 — smoothed corner path (cornerSmoothing)
 import { smoothedRectPath } from '@/lib/smooth-corners'
+// PHASE 17 — ellipse arc geometry + live boolean group baked geometry
+import { ellipseShapePath, arcIsEvenOdd } from '@/lib/arc'
+import { booleanGroupPathD } from '@/lib/boolean-ops'
 
 // Generate SVG defs for gradients, filters, clip paths, and image patterns
 function generateSVGDefs(elements: DesignElement[], zoom: number): React.ReactNode {
@@ -103,6 +106,21 @@ function generateSVGDefs(elements: DesignElement[], zoom: number): React.ReactNo
             </pattern>
           )
         }
+      } else if (fill.type === 'pattern' && fill.imageUrl) {
+        // PHASE 17 — pattern paint: image tile repeat, tile = natural size × scale.
+        // Source parity: <pattern patternUnits="userSpaceOnUse" width={imgW*scalingFactor}
+        // height={imgH*scalingFactor}><image …/></pattern> (9456 / 3835 bundles).
+        // userSpaceOnUse resolves in the REFERENCING element's local space, so the
+        // tile grid anchors at the element's top-left — deterministic per element.
+        const id = `pat-${el.id}-${fillIdx}`
+        const sc = fill.patternScale && fill.patternScale > 0 ? fill.patternScale : 1
+        const tw = Math.max(1, (fill.patternW || 100) * sc)
+        const th = Math.max(1, (fill.patternH || 100) * sc)
+        defs.push(
+          <pattern key={id} id={id} patternUnits="userSpaceOnUse" x={0} y={0} width={tw} height={th}>
+            <image href={fill.imageUrl} x={0} y={0} width={tw} height={th} preserveAspectRatio="none" />
+          </pattern>
+        )
       }
       fillIdx++
     }
@@ -173,6 +191,9 @@ function getFillForElement(el: DesignElement, zoom: number, fillIndex: number = 
         return `url(#grad-${el.id}-${fillIndex})`
       case 'image':
         return fill.imageUrl ? `url(#img-${el.id}-${fillIndex})` : 'none'
+      case 'pattern':
+        // PHASE 17 — pattern paint (tile repeat)
+        return fill.imageUrl ? `url(#pat-${el.id}-${fillIndex})` : 'none'
     }
   }
   
@@ -412,7 +433,27 @@ const CanvasElement = React.memo(function CanvasElement({
           </g>
         )
       }
-      case 'ellipse':
+      case 'ellipse': {
+        // PHASE 17 — arc-aware: pie/donut path when arc data present
+        if (el.arc) {
+          const d = ellipseShapePath(el.width, el.height, el.arc)
+          if (d) {
+            return (
+              <path
+                d={d}
+                fill={fillAttr}
+                fillRule={arcIsEvenOdd(el.arc) ? 'evenodd' : undefined}
+                stroke={strokeAttr}
+                strokeWidth={el.strokeWidth}
+                strokeLinejoin="round"
+                opacity={el.opacity / 100}
+                filter={filterAttr}
+                transform={transform}
+                style={style}
+              />
+            )
+          }
+        }
         return (
           <ellipse
             cx={el.width / 2} cy={el.height / 2} rx={el.width / 2} ry={el.height / 2}
@@ -426,6 +467,7 @@ const CanvasElement = React.memo(function CanvasElement({
             style={style}
           />
         )
+      }
       case 'line':
         return (
           <line
@@ -693,6 +735,27 @@ const CanvasElement = React.memo(function CanvasElement({
         )
       }
       case 'boolean': {
+        // PHASE 17 — live boolean groups render their TRUE baked geometry
+        // (Greiner-Hormann fold of children). Fixes the latent PHASE 6 defect
+        // where the group displayed as a plain bbox rect (proven live by
+        // scripts/p17_baseline.sh). Fallback to the old rect when the fold
+        // fails (degenerate operands).
+        const d = booleanGroupPathD(el)
+        if (d) {
+          return (
+            <path
+              d={d}
+              fill={fillAttr}
+              fillRule="evenodd"
+              stroke={strokeAttr}
+              strokeWidth={el.strokeWidth}
+              strokeLinejoin="round"
+              opacity={el.opacity / 100}
+              filter={filterAttr}
+              style={style}
+            />
+          )
+        }
         return (
           <rect
             x={0} y={0} width={el.width} height={el.height}
@@ -797,6 +860,11 @@ const CanvasElement = React.memo(function CanvasElement({
             case 'rectangle':
               return <rect x={0} y={0} width={mask.width} height={mask.height} rx={mask.cornerRadius || 0} ry={mask.cornerRadius || 0} />
             case 'ellipse':
+              // PHASE 17 — arc-aware mask shape
+              if (mask.arc) {
+                const md = ellipseShapePath(mask.width, mask.height, mask.arc)
+                if (md) return <path d={md} fillRule={arcIsEvenOdd(mask.arc) ? 'evenodd' : undefined} />
+              }
               return <ellipse cx={mask.width / 2} cy={mask.height / 2} rx={mask.width / 2} ry={mask.height / 2} />
             case 'polygon': {
               const sides = mask.sides || 6

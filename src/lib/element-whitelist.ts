@@ -20,6 +20,8 @@ export const ELEMENT_FIELD_WHITELIST = [
   'textDecoration', 'textAlign', 'lineHeight', 'letterSpacing', 'textColor',
   // vector / shape
   'pathPoints', 'pathClosed', 'vectorNetwork', 'sides', 'innerRadius',
+  // PHASE 17 — ellipse arc (Start/Sweep/Ratio; see lib/arc.ts)
+  'arc',
   // structure
   'children', 'autoLayout', 'clipContent', 'constraints', 'constraintsEdited',
   'booleanOperation', 'booleanSourceIds', 'booleanContours', 'isMask',

@@ -34,3 +34,19 @@
 - قرار 013: أداة Scale تعمل من لقطة أصلية (deep clone عند بدء السحب) فلا انجراف تراكمي؛ مرساة الزاوية المقابلة لمقبض السحب
 - قرار 014: شبكة البكسل تظهر عند ≥400% فقط (سلوك Figma)؛ إعادة توزيع الاختصارات: ⌘' بكسل / ⇧⌘' snap / ⌘\ شبكات تخطيط / ⌘⇧; شبكة نقطية
 - تفصيل التنفيذ في PROGRESS.md قسم "جلسة المراحل 7←11"
+
+### DECISION-015 — PHASE 17: baked-geometry display model for boolean groups + wave-2 plan
+- Live verification (scripts/p17_baseline.sh) PROVED the latent PHASE 6 defect: boolean
+  groups rendered as a bbox rect (first operand's fill); children never rendered; no
+  compositing anywhere (Canvas 'boolean' → default rect; FrameRenderer had no case).
+- Fix model (documented): groups render their TRUE folded geometry (Greiner-Hormann,
+  same engine as export) painted with the group's own fill/stroke. Per-child paint
+  compositing inside live groups is UNKNOWN at minified-source level — not modeled.
+- flattenSelection bakes exactly the same geometry permanently (parity by construction).
+- KNOWN LIMITATION (documented, not silently fixed): booleanOperation() treats operand
+  x/y as page-absolute — consistent with the only existing creation path (operands were
+  top-level at grouping time). Grouping nested-children across levels is not supported
+  by the store action; out of P17 scope.
+- Wave-2 plan (PORT-PLAN-17-22.md): 21 evidence-verified gaps; rejected items documented
+  (voice = AI-chat only; search-palette SRC-ABSENT; bend subsumed by vector-edit; .fig =
+  URL false positives; annotate = a11y lint; blur already ported — audit pattern too literal).

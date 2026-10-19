@@ -16,6 +16,9 @@
 import { DesignElement } from '@/store/editor-store'
 import { pathElementToSvgPath, isEvenOddFill } from '@/lib/element-utils'
 import { calculateAutoLayout, hasAutoLayout } from '@/lib/auto-layout'
+// PHASE 17 — ellipse arc + live boolean baked geometry
+import { ellipseShapePath, arcIsEvenOdd } from '@/lib/arc'
+import { booleanGroupPathD } from '@/lib/boolean-ops'
 
 export type ExportFormat = 'PNG' | 'JPG' | 'SVG' | 'PDF' | 'WEBP'
 
@@ -191,6 +194,8 @@ function fillAttrOf(el: DesignElement): string {
     if (fill.visible === false) return 'none'
     if (fill.type === 'solid') return fill.color === 'transparent' ? 'none' : fill.color
     if (fill.type === 'image' && fill.imageUrl) return `url(#exp-img-${el.id})`
+    // PHASE 17 — pattern paint (tile repeat)
+    if (fill.type === 'pattern' && fill.imageUrl) return `url(#exp-pat-${el.id})`
     // gradients are approximated by their first stop color offscreen
     if ((fill.type === 'linear-gradient' || fill.type === 'radial-gradient') && fill.gradientStops?.length) {
       return fill.gradientStops[0].color
@@ -215,6 +220,26 @@ function appendDefs(target: SVGElement, el: DesignElement) {
     image.setAttribute('width', '1')
     image.setAttribute('height', '1')
     image.setAttribute('preserveAspectRatio', 'xMidYMid slice')
+    pattern.appendChild(image)
+    defs.appendChild(pattern)
+    target.appendChild(defs)
+  }
+  // PHASE 17 — pattern paint (tile repeat, source parity)
+  if (fill?.type === 'pattern' && fill.imageUrl) {
+    const sc = fill.patternScale && fill.patternScale > 0 ? fill.patternScale : 1
+    const tw = String(Math.max(1, (fill.patternW || 100) * sc))
+    const th = String(Math.max(1, (fill.patternH || 100) * sc))
+    const defs = document.createElementNS(SVG_NS, 'defs')
+    const pattern = document.createElementNS(SVG_NS, 'pattern')
+    pattern.setAttribute('id', `exp-pat-${el.id}`)
+    pattern.setAttribute('patternUnits', 'userSpaceOnUse')
+    pattern.setAttribute('x', '0'); pattern.setAttribute('y', '0')
+    pattern.setAttribute('width', tw); pattern.setAttribute('height', th)
+    const image = document.createElementNS(SVG_NS, 'image')
+    image.setAttribute('href', fill.imageUrl)
+    image.setAttribute('x', '0'); image.setAttribute('y', '0')
+    image.setAttribute('width', tw); image.setAttribute('height', th)
+    image.setAttribute('preserveAspectRatio', 'none')
     pattern.appendChild(image)
     defs.appendChild(pattern)
     target.appendChild(defs)
@@ -257,9 +282,36 @@ function renderTree(el: DesignElement, svg: SVGElement): SVGElement | null {
       break
     }
     case 'ellipse': {
+      // PHASE 17 — arc-aware: pie/donut path when arc data present
+      if (el.arc) {
+        const d = ellipseShapePath(el.width, el.height, el.arc)
+        if (d) {
+          const p = document.createElementNS(SVG_NS, 'path')
+          const attrs: Record<string, string> = { ...common, d, 'stroke-linejoin': 'round' }
+          if (arcIsEvenOdd(el.arc)) attrs['fill-rule'] = 'evenodd'
+          set(p, attrs)
+          g.appendChild(p)
+          break
+        }
+      }
       const ellipse = document.createElementNS(SVG_NS, 'ellipse')
       set(ellipse, { ...common, cx: String(el.width / 2), cy: String(el.height / 2), rx: String(el.width / 2), ry: String(el.height / 2) })
       g.appendChild(ellipse)
+      break
+    }
+    case 'boolean': {
+      // PHASE 17 — export the true baked geometry (was: default rect)
+      const d = booleanGroupPathD(el)
+      if (d) {
+        const p = document.createElementNS(SVG_NS, 'path')
+        const attrs: Record<string, string> = { ...common, d, 'fill-rule': 'evenodd', 'stroke-linejoin': 'round' }
+        set(p, attrs)
+        g.appendChild(p)
+      } else {
+        const rect = document.createElementNS(SVG_NS, 'rect')
+        set(rect, { ...common, x: '0', y: '0', width: String(el.width), height: String(el.height) })
+        g.appendChild(rect)
+      }
       break
     }
     case 'line': {
@@ -392,6 +444,16 @@ function exportMaskClipShape(mask: DesignElement): SVGElement | null {
       return rect
     }
     case 'ellipse': {
+      // PHASE 17 — arc-aware mask shape
+      if (mask.arc) {
+        const md = ellipseShapePath(mask.width, mask.height, mask.arc)
+        if (md) {
+          const p = document.createElementNS(SVG_NS, 'path')
+          p.setAttribute('d', md)
+          if (arcIsEvenOdd(mask.arc)) p.setAttribute('fill-rule', 'evenodd')
+          return p
+        }
+      }
       const ell = document.createElementNS(SVG_NS, 'ellipse')
       ell.setAttribute('cx', String(mask.width / 2)); ell.setAttribute('cy', String(mask.height / 2))
       ell.setAttribute('rx', String(mask.width / 2)); ell.setAttribute('ry', String(mask.height / 2))

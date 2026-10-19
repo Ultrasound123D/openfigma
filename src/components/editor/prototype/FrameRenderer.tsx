@@ -20,6 +20,9 @@ import { calculateAutoLayout, hasAutoLayout } from '@/lib/auto-layout'
 import { buildTextLines, applyTextCase } from '@/lib/text-measure'
 // PHASE 14 — angular + diamond gradient paints
 import { AngularPatternContent, DiamondPatternContent } from '@/lib/gradient-paints'
+// PHASE 17 — ellipse arc + live boolean baked geometry
+import { ellipseShapePath, arcIsEvenOdd } from '@/lib/arc'
+import { booleanGroupPathD } from '@/lib/boolean-ops'
 
 /** Resolve the SVG fill value for an element (solid / gradient / image). */
 function fillOf(el: DesignElement): string {
@@ -29,6 +32,8 @@ function fillOf(el: DesignElement): string {
     if (fill.type === 'solid') return fill.color === 'transparent' ? 'none' : fill.color
     if (fill.type === 'linear-gradient' || fill.type === 'radial-gradient' || fill.type === 'angular-gradient' || fill.type === 'diamond-gradient') return `url(#pf-grad-${el.id})`
     if (fill.type === 'image') return fill.imageUrl ? `url(#pf-img-${el.id})` : 'none'
+    // PHASE 17 — pattern paint (tile repeat)
+    if (fill.type === 'pattern') return fill.imageUrl ? `url(#pf-pat-${el.id})` : 'none'
   }
   return el.fill === 'transparent' ? 'none' : el.fill
 }
@@ -71,6 +76,16 @@ function ElementDefs({ el }: { el: DesignElement }) {
       {fill?.type === 'image' && fill.imageUrl && (
         <pattern id={`pf-img-${el.id}`} width="100%" height="100%" patternContentUnits="objectBoundingBox">
           <image href={fill.imageUrl} x="0" y="0" width="1" height="1" preserveAspectRatio="xMidYMid slice" />
+        </pattern>
+      )}
+      {fill?.type === 'pattern' && fill.imageUrl && (
+        <pattern id={`pf-pat-${el.id}`} patternUnits="userSpaceOnUse" x={0} y={0}
+          width={Math.max(1, (fill.patternW || 100) * (fill.patternScale && fill.patternScale > 0 ? fill.patternScale : 1))}
+          height={Math.max(1, (fill.patternH || 100) * (fill.patternScale && fill.patternScale > 0 ? fill.patternScale : 1))}>
+          <image href={fill.imageUrl} x={0} y={0}
+            width={Math.max(1, (fill.patternW || 100) * (fill.patternScale && fill.patternScale > 0 ? fill.patternScale : 1))}
+            height={Math.max(1, (fill.patternH || 100) * (fill.patternScale && fill.patternScale > 0 ? fill.patternScale : 1))}
+            preserveAspectRatio="none" />
         </pattern>
       )}
       {needsFilter && (
@@ -173,6 +188,11 @@ function Shape({ el }: { el: DesignElement }) {
       )
     }
     case 'ellipse':
+      // PHASE 17 — arc-aware (pie/donut)
+      if (el.arc) {
+        const ad = ellipseShapePath(el.width, el.height, el.arc)
+        if (ad) return <path d={ad} fillRule={arcIsEvenOdd(el.arc) ? 'evenodd' : undefined} strokeLinejoin="round" {...common} />
+      }
       return <ellipse cx={el.width / 2} cy={el.height / 2} rx={el.width / 2} ry={el.height / 2} {...common} />
     case 'line':
       return (
@@ -300,6 +320,12 @@ function Shape({ el }: { el: DesignElement }) {
       if (!d) return null
       return <path d={d} fill={fillAttr} fillRule={isEvenOddFill(el) ? 'evenodd' : undefined} stroke={strokeAttr} strokeWidth={el.strokeWidth || 2} strokeLinecap="round" strokeLinejoin="round" opacity={el.opacity / 100} strokeDasharray={strokeDasharray} />
     }
+    case 'boolean': {
+      // PHASE 17 — true baked geometry (was: bbox rect via default branch)
+      const bd = booleanGroupPathD(el)
+      if (!bd) return <rect x={0} y={0} width={el.width} height={el.height} {...common} />
+      return <path d={bd} fill={fillAttr} fillRule="evenodd" stroke={strokeAttr} strokeWidth={el.strokeWidth || 2} strokeLinejoin="round" opacity={el.opacity / 100} strokeDasharray={strokeDasharray} />
+    }
     default:
       return <rect x={0} y={0} width={el.width} height={el.height} {...common} />
   }
@@ -386,6 +412,11 @@ function maskClipShape(mask: DesignElement): React.ReactNode {
     case 'rectangle':
       return <rect x={0} y={0} width={mask.width} height={mask.height} rx={mask.cornerRadius || 0} ry={mask.cornerRadius || 0} />
     case 'ellipse':
+      // PHASE 17 — arc-aware mask shape
+      if (mask.arc) {
+        const md = ellipseShapePath(mask.width, mask.height, mask.arc)
+        if (md) return <path d={md} fillRule={arcIsEvenOdd(mask.arc) ? 'evenodd' : undefined} />
+      }
       return <ellipse cx={mask.width / 2} cy={mask.height / 2} rx={mask.width / 2} ry={mask.height / 2} />
     case 'polygon': {
       const sides = mask.sides || 6
