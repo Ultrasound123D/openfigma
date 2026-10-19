@@ -17,8 +17,9 @@
 | PHASE 11 | أدوات الدقة + الختام: Scale tool (K) + Deep select (⌘نقرة) + قياس المسافات (alt+تحويم) + حزمة تسليم | ✅ |
 | PHASE 12 | Auto Layout كامل: WRAP + أحجام FIXED/HUG/FILL (إطار+أبناء) + min/max + محاذاة counter منفصلة + baseline + أبناء absolute + reorder-on-drop + لوحة UI بتعادل Figma | ✅ |
 | PHASE 13 | نص متقدم: محاذاة عمودية top/middle/bottom + justified (توزيع كلمات فعلي) + قوائم ordered/unordered بمسافة بادئة معلّقة + إصلاح أمني (whitelist موحّد POST/PUT) | ✅ |
+| PHASE 14 | تدرجات كاملة: Angular (مخروطي بقطاعات فعلية) + Diamond (مقياس |dx|+|dy| رباعي الأرباع بدقة متجهية) + إصلاح خلل كامن في فهرسة أنماط التعبئة (العنصر الثاني بتدرج/صورة لم يكن يُرسم) | ✅ |
 
-> **المراحل 0 ← 13 مغلقة.** خطة النقل الكامل: PORT-PLAN-12-16.md (12✅ ← 16).
+> **المراحل 0 ← 14 مغلقة.** خطة النقل الكامل: PORT-PLAN-12-16.md (12✅ ← 16).
 
 ## سجل التحقق
 - Baseline (قبل PHASE 1): tsc ✅ / lint ✅ / build ✅
@@ -66,3 +67,12 @@
 - **UI**: أزرار V-Align الثلاثة + أزرار List (—/•/1.) + حقل Indent يظهر عند تفعيل القائمة. زر justified الرابع كان موجوداً.
 - **إصلاح أمني (عيب قديم كُشف بالتحقق)**: مسار POST للعناصر كان ينشر جسم العميل خاماً بلا whitelist (PUT فقط كان محمياً) — أُنشئ src/lib/element-whitelist.ts كمصدر واحد للقائمتين، مع تكريم id العميل (تعتمد عليه اختبارات الدخان وMCP).
 - **التحقق**: tsc/eslint/build صفر. API round-trip للحقول الثلاثة + justified مع حجب evilField على POST وPUT. حي بالمتصفح: أعلى y=18 مقابل أسفل y=102 (دقة كاملة)، قائمة مرقمة 1./2./3. بمسافة معلّقة (بادئة x=12، نص x=30/33)، نقاط •، justified موزّع (First@0/line@105/of@203/text@288). VLM أكّد القائمة المرقمة وأزرار V-Align/List. لقطات: download/openfigma-p13-{valign-bottom,list-ordered,justified}.png
+
+## PHASE 14 — تفصيل التنفيذ والتحقق (2026-10-20)
+- **lib/gradient-paints.tsx**: AngularPatternContent (قطاعات دائرية حول المركز، إزاحة stop تُخطط لمسح 0→360° بدوران gradientAngle، ألوان مُستوفاة بين النقاط) + DiamondPatternContent (مقياس Figma |dx|+|dy| خطي داخل كل رُبيع محورى → 4 مستطيلات رباعية بتدرجات خطية 45° نحو الزوايا — مطابقة قِياسية للماس) + mixHex/colorAt + معاينات CSS.
+- **النموذج**: FillStyle.type += 'angular-gradient' | 'diamond-gradient'.
+- **الرندر**: Canvas generateSVGDefs + getFillForElement + FrameRenderer (fillOf + ElementDefs) — الأنماط بـ patternUnits وpatternContentUnits معاً objectBoundingBox.
+- **UI**: خيارا Angular/Diamond في منتقي نوع التعبئة + معاينة العيّنة عبر gradientPreviewCSS (conic للـangular).
+- **إصلاح خلل كامن (كُشف بالتحقق الحي)**: معرّفات أنماط التدرج/الصورة كانت تستخدم عدّاداً شاملاً بينما getFillForElement يحلّ بفهرس التعبئة داخل مصفوفة fills — أي عنصر ثانٍ بتدرج/صورة كان يُرسم بلا تعبئة (مرجع لمعرّف غير موجود). أُصلح بفهرس لكل عنصر.
+- **إصلاح ثانٍ**: تدرجات userSpaceOnUse داخل أنماط objectBoundingBox لا تُحل في Chromium — استُبدلت بـobjectBoundingBox نسبةً لصندوق كل رُباع.
+- **التحقق**: tsc/eslint/build صفر. حي: نمط angular بـ30 قطاعاً (أول لون مُستوفى #ea4b29)، نمط diamond بأربعة مستطيلات + 4 تدرجات، كلا العنصرين بملء url(#grad-*-0) متطابق، تبديل النوع والزاوية يثبت. بكسلياً: مركز الماس (133,65,218) بنفسجي، الزاوية (239,208,25) أصفر (#F5D90A=(245,217,10)). VLM أكّد المربعين. لقطة: download/openfigma-p14-gradients.png

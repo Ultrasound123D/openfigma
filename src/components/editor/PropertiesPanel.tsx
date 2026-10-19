@@ -36,6 +36,7 @@ import { EffectsPanel } from './EffectsPanel'
 import { ExportPanel } from './ExportPanel'
 // PHASE 7 — style menu (four-dots) per slot
 import type { StyleSlot, StyleKind } from '@/lib/styles'
+import { gradientPreviewCSS } from '@/lib/gradient-paints'
 // PHASE 8 — per-frame layout grid editor
 import { LayoutGridsPanel } from './LayoutGridsPanel'
 
@@ -1297,6 +1298,8 @@ function FillLayerItem({ elementId, fill, index }: { elementId: string; fill: Fi
           <option value="solid">Solid</option>
           <option value="linear-gradient">Linear</option>
           <option value="radial-gradient">Radial</option>
+          <option value="angular-gradient">Angular</option>
+          <option value="diamond-gradient">Diamond</option>
         </select>
         {fill.type === 'solid' ? (
           <input
@@ -1309,7 +1312,7 @@ function FillLayerItem({ elementId, fill, index }: { elementId: string; fill: Fi
           <button
             onClick={() => setShowGradient(!showGradient)}
             className="w-6 h-5 rounded border border-[#555] overflow-hidden"
-            style={{ background: `linear-gradient(${fill.gradientAngle || 0}deg, ${fill.color}, ${(fill.gradientStops || [])[1]?.color || '#000'})` }}
+            style={{ background: gradientPreviewCSS(fill.type, fill.gradientStops && fill.gradientStops.length >= 2 ? fill.gradientStops : [{ offset: 0, color: fill.color, opacity: 1 }, { offset: 1, color: (fill.gradientStops || [])[1]?.color || '#000', opacity: 1 }], fill.gradientAngle || 0) }}
           />
         )}
         <button onClick={() => { pushHistory(); removeFill(elementId, index) }} className="ml-auto">

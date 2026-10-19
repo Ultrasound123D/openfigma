@@ -19,6 +19,8 @@ import { useCanvasKeyboard } from './canvas/use-canvas-keyboard'
 import { FrameGrids } from './canvas/FrameGrids'
 // PHASE 10 — real text measurement + case transform
 import { measureText, measureLine, applyTextCase, buildTextLines } from '@/lib/text-measure'
+// PHASE 14 — angular (conic) + diamond gradient paints
+import { AngularPatternContent, DiamondPatternContent } from '@/lib/gradient-paints'
 
 // Generate SVG defs for gradients, filters, clip paths, and image patterns
 function generateSVGDefs(elements: DesignElement[], zoom: number): React.ReactNode {
@@ -26,14 +28,18 @@ function generateSVGDefs(elements: DesignElement[], zoom: number): React.ReactNo
   const allEls = getAllElements(elements)
   
   let filterIndex = 0
-  let gradientIndex = 0
 
   for (const el of allEls) {
-    // Generate gradient defs for fills
+    // Generate gradient defs for fills.
+    // PHASE 14 FIX: ids must use the fill's index in the element's fills array
+    // (getFillForElement resolves url(#grad-{el.id}-{fillIndex})) — the old
+    // global counter drifted for any 2nd+ gradient/image element, making the
+    // fill reference a non-existent pattern (element rendered unpainted).
     const fills = el.fills || []
+    let fillIdx = 0
     for (const fill of fills) {
       if (fill.type === 'linear-gradient' && fill.gradientStops && fill.gradientStops.length >= 2) {
-        const id = `grad-${el.id}-${gradientIndex++}`
+        const id = `grad-${el.id}-${fillIdx}`
         const angle = fill.gradientAngle || 0
         const rad = (angle * Math.PI) / 180
         const x1 = 0.5 - 0.5 * Math.sin(rad)
@@ -49,7 +55,7 @@ function generateSVGDefs(elements: DesignElement[], zoom: number): React.ReactNo
           </linearGradient>
         )
       } else if (fill.type === 'radial-gradient' && fill.gradientStops && fill.gradientStops.length >= 2) {
-        const id = `grad-${el.id}-${gradientIndex++}`
+        const id = `grad-${el.id}-${fillIdx}`
         defs.push(
           <radialGradient key={id} id={id} cx="50%" cy="50%" r="50%" gradientUnits="objectBoundingBox">
             {fill.gradientStops.map((stop, i) => (
@@ -57,8 +63,24 @@ function generateSVGDefs(elements: DesignElement[], zoom: number): React.ReactNo
             ))}
           </radialGradient>
         )
+      } else if (fill.type === 'angular-gradient' && fill.gradientStops && fill.gradientStops.length >= 2) {
+        // PHASE 14: conic sweep as pie slices inside a unit pattern
+        const id = `grad-${el.id}-${fillIdx}`
+        defs.push(
+          <pattern key={id} id={id} patternUnits="objectBoundingBox" patternContentUnits="objectBoundingBox" x={0} y={0} width={1} height={1}>
+            <AngularPatternContent stops={fill.gradientStops} angleDeg={fill.gradientAngle || 0} />
+          </pattern>
+        )
+      } else if (fill.type === 'diamond-gradient' && fill.gradientStops && fill.gradientStops.length >= 2) {
+        // PHASE 14: diamond metric = per-quadrant 45° linear gradients (exact)
+        const id = `grad-${el.id}-${fillIdx}`
+        defs.push(
+          <pattern key={id} id={id} patternUnits="objectBoundingBox" patternContentUnits="objectBoundingBox" x={0} y={0} width={1} height={1}>
+            <DiamondPatternContent stops={fill.gradientStops} idBase={`dia-${el.id}-${fillIdx}`} />
+          </pattern>
+        )
       } else if (fill.type === 'image' && fill.imageUrl) {
-        const id = `img-${el.id}-${gradientIndex++}`
+        const id = `img-${el.id}-${fillIdx}`
         // PHASE 10 — image fill modes: fill (cover), fit (contain), crop (manual)
         const mode = fill.scaleMode || 'fill'
         if (mode === 'crop') {
@@ -80,6 +102,7 @@ function generateSVGDefs(elements: DesignElement[], zoom: number): React.ReactNo
           )
         }
       }
+      fillIdx++
     }
 
     // Generate filter defs for shadows and blurs
@@ -143,6 +166,8 @@ function getFillForElement(el: DesignElement, zoom: number, fillIndex: number = 
         return fill.color === 'transparent' ? 'none' : fill.color
       case 'linear-gradient':
       case 'radial-gradient':
+      case 'angular-gradient':
+      case 'diamond-gradient':
         return `url(#grad-${el.id}-${fillIndex})`
       case 'image':
         return fill.imageUrl ? `url(#img-${el.id}-${fillIndex})` : 'none'

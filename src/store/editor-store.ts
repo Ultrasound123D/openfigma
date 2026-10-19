@@ -119,7 +119,7 @@ export interface GradientStop {
 }
 
 export interface FillStyle {
-  type: 'solid' | 'linear-gradient' | 'radial-gradient' | 'image'
+  type: 'solid' | 'linear-gradient' | 'radial-gradient' | 'angular-gradient' | 'diamond-gradient' | 'image'
   color: string
   opacity: number
   gradientStops?: GradientStop[]

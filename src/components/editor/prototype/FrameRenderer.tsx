@@ -18,6 +18,8 @@ import type { DesignElement } from '@/store/editor-store'
 import { pathElementToSvgPath, isEvenOddFill } from '@/lib/element-utils'
 import { calculateAutoLayout, hasAutoLayout } from '@/lib/auto-layout'
 import { buildTextLines, applyTextCase } from '@/lib/text-measure'
+// PHASE 14 — angular + diamond gradient paints
+import { AngularPatternContent, DiamondPatternContent } from '@/lib/gradient-paints'
 
 /** Resolve the SVG fill value for an element (solid / gradient / image). */
 function fillOf(el: DesignElement): string {
@@ -25,7 +27,7 @@ function fillOf(el: DesignElement): string {
   if (fill) {
     if (fill.visible === false) return 'none'
     if (fill.type === 'solid') return fill.color === 'transparent' ? 'none' : fill.color
-    if (fill.type === 'linear-gradient' || fill.type === 'radial-gradient') return `url(#pf-grad-${el.id})`
+    if (fill.type === 'linear-gradient' || fill.type === 'radial-gradient' || fill.type === 'angular-gradient' || fill.type === 'diamond-gradient') return `url(#pf-grad-${el.id})`
     if (fill.type === 'image') return fill.imageUrl ? `url(#pf-img-${el.id})` : 'none'
   }
   return el.fill === 'transparent' ? 'none' : el.fill
@@ -55,6 +57,16 @@ function ElementDefs({ el }: { el: DesignElement }) {
             <stop key={i} offset={s.offset} stopColor={s.color} stopOpacity={s.opacity} />
           ))}
         </radialGradient>
+      )}
+      {fill?.type === 'angular-gradient' && (fill.gradientStops || []).length >= 2 && (
+        <pattern id={`pf-grad-${el.id}`} patternUnits="objectBoundingBox" patternContentUnits="objectBoundingBox" x={0} y={0} width={1} height={1}>
+          <AngularPatternContent stops={fill.gradientStops || []} angleDeg={fill.gradientAngle || 0} />
+        </pattern>
+      )}
+      {fill?.type === 'diamond-gradient' && (fill.gradientStops || []).length >= 2 && (
+        <pattern id={`pf-grad-${el.id}`} patternUnits="objectBoundingBox" patternContentUnits="objectBoundingBox" x={0} y={0} width={1} height={1}>
+          <DiamondPatternContent stops={fill.gradientStops || []} idBase={`pf-dia-${el.id}`} />
+        </pattern>
       )}
       {fill?.type === 'image' && fill.imageUrl && (
         <pattern id={`pf-img-${el.id}`} width="100%" height="100%" patternContentUnits="objectBoundingBox">
