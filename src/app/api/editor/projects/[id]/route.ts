@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getProject, saveProject, deleteProject } from '@/lib/server-state'
+import { publishProjectEvent, getRequestOrigin } from '@/lib/events/bus'
 
 // GET /api/editor/projects/[id]
 export async function GET(
@@ -27,6 +28,13 @@ export async function PUT(
   }
   const updated = { ...project, ...body, id, updatedAt: new Date().toISOString() }
   await saveProject(updated)
+
+  // Live sync: whole project replaced (e.g. another tab pushed its state).
+  publishProjectEvent(id, {
+    type: 'project-updated',
+    origin: getRequestOrigin(request),
+  })
+
   return NextResponse.json({ project: updated })
 }
 

@@ -3,6 +3,7 @@ import {
   getProject, saveProject, findElementInList, updateElementInList,
   removeElementFromList, generateId, flattenElements
 } from '@/lib/server-state'
+import { publishProjectEvent, getRequestOrigin } from '@/lib/events/bus'
 
 // POST /api/editor/projects/[id]/tools
 export async function POST(
@@ -297,5 +298,12 @@ export async function POST(
   }
 
   await saveProject(project)
+
+  // Live sync: a mutating tool action was applied (MCP / AI edits).
+  publishProjectEvent(projectId, {
+    type: 'project-updated',
+    origin: getRequestOrigin(request),
+  })
+
   return NextResponse.json({ success: true })
 }

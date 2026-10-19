@@ -2,8 +2,30 @@
 
 import { create } from 'zustand'
 import { findElementInList, updateElementInList, removeElementFromList, deepCloneElements, getAllElements } from '@/lib/element-utils'
+import { normalizeServerElement, normalizeServerProject } from '@/lib/server-project'
+import {
+  isBooleanOperandType, flattenOperand, polysToContours, contoursBounds, foldElementPolys,
+} from '@/lib/boolean-ops'
+import type { Poly } from '@/lib/polygon-clip'
+import type { Interaction, PrototypeAction, OverlayBackground } from '@/types/prototype'
+// PHASE 7 — style helpers (types are import()'d above to avoid a value cycle)
+import {
+  applyStyleUpdates, detachStyleUpdates, paintFromElement, textFromElement, effectsFromElement,
+} from '@/lib/styles'
+// PHASE 9 — constraints engine
+import { constrainChildren, inferConstraints } from '@/lib/constraints'
+// PHASE 10 — real text measurement for auto-resize
+import { measureText } from '@/lib/text-measure'
 
-export type ToolType = 'move' | 'frame' | 'rectangle' | 'ellipse' | 'line' | 'pen' | 'text' | 'comment' | 'hand' | 'polygon' | 'star' | 'pencil' | 'eyedropper' | 'slice' | 'arrow' | 'image'
+/** Stable per-tab client id used for SSE echo suppression. */
+function generateClientId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return `tab-${crypto.randomUUID().slice(0, 8)}`
+  }
+  return `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+export type ToolType = 'move' | 'frame' | 'rectangle' | 'ellipse' | 'line' | 'pen' | 'text' | 'comment' | 'hand' | 'polygon' | 'star' | 'pencil' | 'eyedropper' | 'slice' | 'arrow' | 'image' | 'scale'
 
 export type ElementType = 'rectangle' | 'frame' | 'group' | 'ellipse' | 'line' | 'text' | 'path' | 'polygon' | 'star' | 'boolean' | 'slice' | 'arrow' | 'component-set'
 
@@ -86,6 +108,13 @@ export interface FillStyle {
   gradientY2?: number
   imageUrl?: string
   visible?: boolean
+  /** PHASE 10 — image fill modes (Figma parity)
+   *  fill: cover (slice) — default; fit: contain (meet, letterboxed);
+   *  crop: manual scale + offset */
+  scaleMode?: 'fill' | 'fit' | 'crop'
+  scale?: number
+  offsetX?: number
+  offsetY?: number
 }
 
 export interface StrokeStyle {
@@ -230,7 +259,7 @@ export interface DesignElement {
   fontSize?: number
   fontWeight?: number
   fontStyle?: 'normal' | 'italic'
-  textDecoration?: 'none' | 'underline'
+  textDecoration?: 'none' | 'underline' | 'strikethrough'
   textAlign?: 'left' | 'center' | 'right' | 'justified'
   lineHeight?: number
   letterSpacing?: number
@@ -251,8 +280,8 @@ export interface DesignElement {
   blurs?: BlurEffect[]
   // Auto layout (for frames)
   autoLayout?: AutoLayout
-  // Export settings
-  exportSettings?: { format: string; scale: number; suffix?: string }[]
+  // Export settings (PHASE 3: format/scale/quality per row)
+  exportSettings?: { format: string; scale: number; quality?: number; suffix?: string }[]
   // Blend mode
   blendMode?: string
   // Component system
@@ -277,11 +306,29 @@ export interface DesignElement {
   flipV?: boolean
   // Constraints
   constraints?: { horizontal: string; vertical: string }
+  /** PHASE 9: true once the user set constraints manually — disables auto re-inference on moves */
+  constraintsEdited?: boolean
   // Clip content (for frames)
   clipContent?: boolean
   // Boolean operation result
   booleanOperation?: 'union' | 'subtract' | 'intersect' | 'exclude'
   booleanSourceIds?: string[]
+  /** PHASE 6: multi-contour result loops (rendered fillRule=evenodd). Primary contour is vectorNetwork. */
+  booleanContours?: VectorNetwork[]
+  /** PHASE 6: mask — clips all PREVIOUS siblings + itself within the same parent. */
+  isMask?: boolean
+  // Prototype interactions (PHASE 2) — optional for backward compatibility
+  interactions?: Interaction[]
+  // PHASE 7 — project style references (see lib/styles.ts)
+  fillStyleId?: string
+  strokeStyleId?: string
+  textStyleId?: string
+  effectStyleId?: string
+  // PHASE 8 — per-frame layout grids (see lib/layout-grids.ts)
+  layoutGrids?: import('@/lib/layout-grids').LayoutGrid[]
+  // PHASE 10 — text sizing/case/strikethrough
+  textAutoResize?: 'fixed' | 'hug' | 'grow'
+  textCase?: 'original' | 'upper' | 'lower' | 'title'
 }
 
 export interface Page {
@@ -315,6 +362,11 @@ interface EditorState {
   snapToElements: boolean
   gridSize: number
   showRulers: boolean
+  // PHASE 8 — view options (see lib/layout-grids.ts for units/DPI)
+  showPixelGrid: boolean
+  showLayoutGrids: boolean
+  snapToPixels: boolean
+  rulerUnit: 'px' | 'in' | 'cm' | 'mm'
   
   // Guides
   guides: Guide[]
@@ -347,6 +399,26 @@ interface EditorState {
   lastSavedAt: number | null
   isSaving: boolean
   isDirty: boolean
+
+  // Live sync (SSE) state
+  /** Id of the server project currently open, or null for a local-only draft */
+  currentProjectId: string | null
+  /** Stable per-tab id used to suppress SSE echoes of our own writes */
+  clientId: string
+  /** 'offline' | 'connecting' | 'live' — reflects the SSE connection */
+  syncStatus: 'offline' | 'connecting' | 'live'
+  /** Human-readable origin of the last remote change (e.g. 'mcp-server', 'tab-…') */
+  lastRemoteOrigin: string | null
+
+  // Prototype player state (PHASE 2)
+  /** Fullscreen prototype playback is active */
+  isPreviewing: boolean
+  /** Frame currently shown in the player (top-level frame id) */
+  previewFrameId: string | null
+  /** Open overlays, innermost last: { frameId, background, closeOnClickOutside } */
+  overlayStack: { frameId: string; background: OverlayBackground; closeOnClickOutside: boolean }[]
+  /** Navigation history for the 'back' action */
+  previewHistory: string[]
   
   // Actions - Selection
   setSelectedElementIds: (ids: string[]) => void
@@ -391,6 +463,9 @@ interface EditorState {
   ungroupElements: (id: string) => void
   renameElement: (id: string, name: string) => void
   selectAll: () => void
+  // Actions - Boolean ops & masks (PHASE 6)
+  applyBooleanOperation: (op: 'union' | 'subtract' | 'intersect' | 'exclude') => { ok: boolean; reason?: string; id?: string }
+  setElementAsMask: (id: string, isMask: boolean) => void
   
   // Actions - Page
   addPage: (name: string) => void
@@ -417,7 +492,19 @@ interface EditorState {
   setSaving: (saving: boolean) => void
   setDirty: (dirty: boolean) => void
   loadElements: (elements: DesignElement[]) => void
+  /** PHASE 4: insert imported elements (images/SVG) as one undoable batch. */
+  importElementsBatch: (elements: DesignElement[]) => void
+  /** PHASE 4: replace the whole document with an imported project file. */
+  loadImportedProject: (pages: Page[], fileName: string | null, guides?: unknown[]) => void
   loadServerProject: (projectId: string) => Promise<void>
+  closeServerProject: () => void
+
+  // Actions - Live sync (SSE)
+  setSyncStatus: (status: 'offline' | 'connecting' | 'live') => void
+  applyRemoteElement: (element: DesignElement, pageId?: string) => void
+  applyRemoteElementUpdate: (element: DesignElement, pageId?: string) => void
+  applyRemoteElementDelete: (elementId: string, pageId?: string) => void
+  applyRemoteProject: (project: unknown) => void
   
   // Actions - Component system
   addComponent: (id: string) => void
@@ -450,8 +537,61 @@ interface EditorState {
   updateEffect: (id: string, effectIndex: number, effect: Partial<ShadowEffect | BlurEffect>) => void
   
   // Actions - Export settings
-  addExportSetting: (id: string, setting: { format: string; scale: number }) => void
+  addExportSetting: (id: string, setting: { format: string; scale: number; quality?: number }) => void
   removeExportSetting: (id: string, index: number) => void
+
+  // Actions - Styles (PHASE 7) — see lib/styles.ts for the model
+  /** All project styles (paint/text/effect) for the open document. */
+  styles: import('@/lib/styles').ProjectStyle[]
+  /** Create a style from the given slot of an element and attach it. */
+  createStyleFromElement: (elementId: string, slot: import('@/lib/styles').StyleSlot, name: string) => string | null
+  /** Apply a style to every currently selected element (where the slot applies). */
+  applyStyleToSelection: (styleId: string) => void
+  /** Detach a style from selection (values are kept). */
+  detachStyleFromSelection: (styleId: string) => void
+  /** Update a style definition and re-broadcast to all referencing elements. */
+  updateStyle: (styleId: string, updates: Partial<import('@/lib/styles').ProjectStyle>) => void
+  /** Rename a style. */
+  renameStyle: (styleId: string, name: string) => void
+  /** Delete a style and detach all references. */
+  deleteStyle: (styleId: string) => void
+  /** Load styles (project import / server load). */
+  loadStyles: (styles: import('@/lib/styles').ProjectStyle[]) => void
+
+  // Actions - Layout grids (PHASE 8)
+  /** Add a layout grid to a frame. */
+  addLayoutGrid: (frameId: string, pattern: 'columns' | 'rows' | 'grid') => void
+  /** Update one layout grid of a frame. */
+  updateLayoutGrid: (frameId: string, gridId: string, updates: Partial<import('@/lib/layout-grids').LayoutGrid>) => void
+  /** Remove one layout grid from a frame. */
+  removeLayoutGrid: (frameId: string, gridId: string) => void
+
+  // Actions - View options (PHASE 8)
+  setShowPixelGrid: (show: boolean) => void
+  setShowLayoutGrids: (show: boolean) => void
+  setSnapToPixels: (snap: boolean) => void
+  setRulerUnit: (unit: 'px' | 'in' | 'cm' | 'mm') => void
+
+  // Actions - Constraints (PHASE 9)
+  /** Resize a frame and reposition/resize its children according to their
+   *  constraints (left/center/right/left-right, top/center/bottom/top-bottom). */
+  resizeFrameWithConstraints: (frameId: string, next: { x?: number; y?: number; width: number; height: number }) => void
+  /** Infer constraints for a child from its position in parent (creation-time). */
+  inferChildConstraints: (childId: string, parentFrameId: string) => void
+
+  // Actions - Text auto-size (PHASE 10)
+  /** Recompute a text element's width/height from its content per textAutoResize mode. */
+  applyTextAutoSize: (elementId: string) => void
+
+  // Actions - Prototype (PHASE 2)
+  addInteraction: (elementId: string, interaction: Interaction) => void
+  updateInteraction: (elementId: string, interactionId: string, updates: Partial<Interaction>) => void
+  removeInteraction: (elementId: string, interactionId: string) => void
+  /** Start fullscreen prototype playback (optionally from a given frame). */
+  startPreview: (frameId?: string | null) => void
+  stopPreview: () => void
+  /** Execute a prototype action during playback (navigate/overlay/url/back). */
+  previewNavigate: (action: PrototypeAction) => void
   
   // Actions - Transform
   setBlendMode: (id: string, mode: string) => void
@@ -496,7 +636,7 @@ export function createDefaultElement(type: ElementType, overrides?: Partial<Desi
     rectangle: { name: `Rectangle ${elementCounter}`, fill: '#D9D9D9', stroke: 'transparent', strokeWidth: 0, cornerRadius: 0 },
     ellipse: { name: `Ellipse ${elementCounter}`, fill: '#D9D9D9', stroke: 'transparent', strokeWidth: 0, cornerRadius: 0 },
     line: { name: `Line ${elementCounter}`, fill: 'transparent', stroke: '#000000', strokeWidth: 2, cornerRadius: 0 },
-    text: { name: `Text ${elementCounter}`, fill: 'transparent', stroke: 'transparent', strokeWidth: 0, cornerRadius: 0, textContent: 'Text', fontFamily: 'Inter', fontSize: 18, fontWeight: 400, textAlign: 'left' as const, textColor: '#000000', lineHeight: 1.4, letterSpacing: 0 },
+    text: { name: `Text ${elementCounter}`, fill: 'transparent', stroke: 'transparent', strokeWidth: 0, cornerRadius: 0, textContent: 'Text', fontFamily: 'Inter', fontSize: 18, fontWeight: 400, textAlign: 'left' as const, textColor: '#000000', lineHeight: 1.4, letterSpacing: 0, textAutoResize: 'grow' as const },
     frame: { name: `Frame ${elementCounter}`, fill: '#FFFFFF', stroke: '#E0E0E0', strokeWidth: 1, cornerRadius: 0, clipContent: true },
     group: { name: `Group ${elementCounter}`, fill: 'transparent', stroke: 'transparent', strokeWidth: 0, cornerRadius: 0 },
     path: { name: `Path ${elementCounter}`, fill: 'transparent', stroke: '#000000', strokeWidth: 2, cornerRadius: 0, pathPoints: [], pathClosed: false },
@@ -900,6 +1040,181 @@ const initialElements: DesignElement[] = [
       },
     ],
   },
+  // ---- PHASE 2 demo flow: two wireframe screens wired with prototype
+  // interactions so playback (▶) works out of the box. The button on
+  // "Home" smart-animates to "Detail" (matching children by name path);
+  // the back button returns. Keep names in sync across both frames so
+  // smart-animate matching (DECISION-005) finds the pairs.
+  {
+    id: 'proto-home',
+    name: 'Home',
+    type: 'frame',
+    x: 700,
+    y: -380,
+    width: 320,
+    height: 480,
+    fill: '#FFFFFF',
+    stroke: '#E0E0E0',
+    strokeWidth: 1,
+    strokeStyle: 'solid',
+    strokeAlign: 'center',
+    cornerRadius: 12,
+    cornerRadiusTL: 12,
+    cornerRadiusTR: 12,
+    cornerRadiusBL: 12,
+    cornerRadiusBR: 12,
+    opacity: 100,
+    rotation: 0,
+    visible: true,
+    locked: false,
+    blendMode: 'normal',
+    flipH: false,
+    flipV: false,
+    clipContent: true,
+    children: [
+      {
+        id: 'proto-home-title',
+        name: 'Title',
+        type: 'text',
+        x: 24, y: 32, width: 272, height: 32,
+        fill: 'transparent', stroke: 'transparent', strokeWidth: 0, strokeStyle: 'solid', strokeAlign: 'center',
+        cornerRadius: 0, cornerRadiusTL: 0, cornerRadiusTR: 0, cornerRadiusBL: 0, cornerRadiusBR: 0,
+        opacity: 100, rotation: 0, visible: true, locked: false, blendMode: 'normal', flipH: false, flipV: false, clipContent: false,
+        textContent: 'Prototype demo', fontFamily: 'Inter', fontSize: 22, fontWeight: 700, textAlign: 'left',
+        textColor: '#1A1A1A', lineHeight: 1.3, letterSpacing: -0.4,
+      },
+      {
+        id: 'proto-home-card',
+        name: 'Card',
+        type: 'rectangle',
+        x: 24, y: 84, width: 272, height: 180,
+        fill: '#F5F5F5', stroke: 'transparent', strokeWidth: 0, strokeStyle: 'solid', strokeAlign: 'center',
+        cornerRadius: 12, cornerRadiusTL: 12, cornerRadiusTR: 12, cornerRadiusBL: 12, cornerRadiusBR: 12,
+        opacity: 100, rotation: 0, visible: true, locked: false, blendMode: 'normal', flipH: false, flipV: false, clipContent: false,
+      },
+      {
+        id: 'proto-home-cta',
+        name: 'CTA Button',
+        type: 'rectangle',
+        x: 24, y: 300, width: 272, height: 48,
+        fill: '#0D99FF', stroke: 'transparent', strokeWidth: 0, strokeStyle: 'solid', strokeAlign: 'center',
+        cornerRadius: 8, cornerRadiusTL: 8, cornerRadiusTR: 8, cornerRadiusBL: 8, cornerRadiusBR: 8,
+        opacity: 100, rotation: 0, visible: true, locked: false, blendMode: 'normal', flipH: false, flipV: false, clipContent: false,
+        interactions: [
+          {
+            id: 'ix-demo-1',
+            trigger: { type: 'click' },
+            action: { type: 'navigate', destinationId: 'proto-detail' },
+            animation: { type: 'smart-animate', durationMs: 400, easing: 'ease-in-out' },
+          },
+        ],
+      },
+      {
+        id: 'proto-home-cta-label',
+        name: 'CTA Label',
+        type: 'text',
+        x: 24, y: 312, width: 272, height: 24,
+        fill: 'transparent', stroke: 'transparent', strokeWidth: 0, strokeStyle: 'solid', strokeAlign: 'center',
+        cornerRadius: 0, cornerRadiusTL: 0, cornerRadiusTR: 0, cornerRadiusBL: 0, cornerRadiusBR: 0,
+        opacity: 100, rotation: 0, visible: true, locked: false, blendMode: 'normal', flipH: false, flipV: false, clipContent: false,
+        textContent: 'Open detail →', fontFamily: 'Inter', fontSize: 15, fontWeight: 550, textAlign: 'center',
+        textColor: '#FFFFFF', lineHeight: 1.2, letterSpacing: 0,
+        interactions: [
+          {
+            id: 'ix-demo-2',
+            trigger: { type: 'click' },
+            action: { type: 'navigate', destinationId: 'proto-detail' },
+            animation: { type: 'smart-animate', durationMs: 400, easing: 'ease-in-out' },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'proto-detail',
+    name: 'Detail',
+    type: 'frame',
+    x: 1080,
+    y: -380,
+    width: 320,
+    height: 480,
+    fill: '#FFFFFF',
+    stroke: '#E0E0E0',
+    strokeWidth: 1,
+    strokeStyle: 'solid',
+    strokeAlign: 'center',
+    cornerRadius: 12,
+    cornerRadiusTL: 12,
+    cornerRadiusTR: 12,
+    cornerRadiusBL: 12,
+    cornerRadiusBR: 12,
+    opacity: 100,
+    rotation: 0,
+    visible: true,
+    locked: false,
+    blendMode: 'normal',
+    flipH: false,
+    flipV: false,
+    clipContent: true,
+    children: [
+      {
+        id: 'proto-detail-title',
+        name: 'Title',
+        type: 'text',
+        x: 24, y: 32, width: 272, height: 32,
+        fill: 'transparent', stroke: 'transparent', strokeWidth: 0, strokeStyle: 'solid', strokeAlign: 'center',
+        cornerRadius: 0, cornerRadiusTL: 0, cornerRadiusTR: 0, cornerRadiusBL: 0, cornerRadiusBR: 0,
+        opacity: 100, rotation: 0, visible: true, locked: false, blendMode: 'normal', flipH: false, flipV: false, clipContent: false,
+        textContent: 'Detail screen', fontFamily: 'Inter', fontSize: 22, fontWeight: 700, textAlign: 'left',
+        textColor: '#1A1A1A', lineHeight: 1.3, letterSpacing: -0.4,
+      },
+      {
+        id: 'proto-detail-card',
+        name: 'Card',
+        type: 'rectangle',
+        x: 24, y: 84, width: 272, height: 280,
+        fill: '#EEF6FF', stroke: 'transparent', strokeWidth: 0, strokeStyle: 'solid', strokeAlign: 'center',
+        cornerRadius: 12, cornerRadiusTL: 12, cornerRadiusTR: 12, cornerRadiusBL: 12, cornerRadiusBR: 12,
+        opacity: 100, rotation: 0, visible: true, locked: false, blendMode: 'normal', flipH: false, flipV: false, clipContent: false,
+      },
+      {
+        id: 'proto-detail-back',
+        name: 'CTA Button',
+        type: 'rectangle',
+        x: 24, y: 396, width: 272, height: 48,
+        fill: '#2C2C2C', stroke: 'transparent', strokeWidth: 0, strokeStyle: 'solid', strokeAlign: 'center',
+        cornerRadius: 8, cornerRadiusTL: 8, cornerRadiusTR: 8, cornerRadiusBL: 8, cornerRadiusBR: 8,
+        opacity: 100, rotation: 0, visible: true, locked: false, blendMode: 'normal', flipH: false, flipV: false, clipContent: false,
+        interactions: [
+          {
+            id: 'ix-demo-3',
+            trigger: { type: 'click' },
+            action: { type: 'back' },
+            animation: { type: 'smart-animate', durationMs: 400, easing: 'ease-in-out' },
+          },
+        ],
+      },
+      {
+        id: 'proto-detail-back-label',
+        name: 'CTA Label',
+        type: 'text',
+        x: 24, y: 408, width: 272, height: 24,
+        fill: 'transparent', stroke: 'transparent', strokeWidth: 0, strokeStyle: 'solid', strokeAlign: 'center',
+        cornerRadius: 0, cornerRadiusTL: 0, cornerRadiusTR: 0, cornerRadiusBL: 0, cornerRadiusBR: 0,
+        opacity: 100, rotation: 0, visible: true, locked: false, blendMode: 'normal', flipH: false, flipV: false, clipContent: false,
+        textContent: '← Back home', fontFamily: 'Inter', fontSize: 15, fontWeight: 550, textAlign: 'center',
+        textColor: '#FFFFFF', lineHeight: 1.2, letterSpacing: 0,
+        interactions: [
+          {
+            id: 'ix-demo-4',
+            trigger: { type: 'click' },
+            action: { type: 'back' },
+            animation: { type: 'smart-animate', durationMs: 400, easing: 'ease-in-out' },
+          },
+        ],
+      },
+    ],
+  },
 ]
 
 const initialPage: Page = {
@@ -936,6 +1251,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   snapToElements: true,
   gridSize: 8,
   showRulers: true,
+  // PHASE 8 — view options (defaults match Figma: pixel grid on, layout grids on,
+  // snap-to-pixels on, ruler unit px @ DPI 72)
+  showPixelGrid: true,
+  showLayoutGrids: true,
+  snapToPixels: true,
+  rulerUnit: 'px' as 'px' | 'in' | 'cm' | 'mm',
+  // PHASE 7 — project styles
+  styles: [],
   guides: [],
   leftTab: 'file',
   rightTab: 'design',
@@ -954,6 +1277,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   lastSavedAt: null,
   isSaving: false,
   isDirty: false,
+  currentProjectId: null,
+  clientId: generateClientId(),
+  syncStatus: 'offline',
+  lastRemoteOrigin: null,
+
+  isPreviewing: false,
+  previewFrameId: null,
+  overlayStack: [],
+  previewHistory: [],
 
   setSelectedElementIds: (ids) => set({ selectedElementIds: ids }),
   
@@ -972,6 +1304,209 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setPan: (x, y) => set({ panX: isFinite(x) ? x : 0, panY: isFinite(y) ? y : 0 }),
   setShowGrid: (show) => set({ showGrid: show }),
   setSnapToGrid: (snap) => set({ snapToGrid: snap }),
+  setShowPixelGrid: (show) => set({ showPixelGrid: show }),
+  setShowLayoutGrids: (show) => set({ showLayoutGrids: show }),
+  setSnapToPixels: (snap) => set({ snapToPixels: snap }),
+  setRulerUnit: (unit) => set({ rulerUnit: unit }),
+
+  // ---------- PHASE 7: styles -------------------------------------------
+  createStyleFromElement: (elementId, slot, name) => {
+    const el = findElementInList(get().elements, elementId)
+    if (!el) return null
+    let style: import('@/lib/styles').ProjectStyle | null = null
+    if (slot === 'fill' || slot === 'stroke') {
+      const paint = paintFromElement(el)
+      if (!paint) return null
+      style = { id: generateId('style'), name, kind: 'paint', paint, createdAt: Date.now() }
+    } else if (slot === 'text') {
+      const text = textFromElement(el)
+      if (!text) return null
+      style = { id: generateId('style'), name, kind: 'text', text, createdAt: Date.now() }
+    } else {
+      const effects = effectsFromElement(el)
+      if (!effects) return null
+      style = { id: generateId('style'), name, kind: 'effect', effects, createdAt: Date.now() }
+    }
+    set((state) => {
+      // attach to the source element
+      const updates: Partial<DesignElement> =
+        slot === 'fill' ? { fillStyleId: style!.id } :
+        slot === 'stroke' ? { strokeStyleId: style!.id } :
+        slot === 'text' ? { textStyleId: style!.id } :
+        { effectStyleId: style!.id }
+      return {
+        styles: [...state.styles, style!],
+        elements: updateElementInList(state.elements, elementId, updates),
+        isDirty: true,
+      }
+    })
+    return style.id
+  },
+
+  applyStyleToSelection: (styleId) => {
+    const state = get()
+    const style = state.styles.find((s) => s.id === styleId)
+    if (!style) return
+    set({
+      elements: state.selectedElementIds.reduce((els, id) => {
+        const el = findElementInList(els, id)
+        if (!el) return els
+        if (style.kind === 'text' && el.type !== 'text') return els
+        if (style.kind === 'paint' && el.fillStyleId === styleId) return els
+        const updates = applyStyleUpdates(el, style)
+        // stroke slot only applied when explicitly asked — fill slot is default
+        return updateElementInList(els, id, updates)
+      }, state.elements),
+      isDirty: true,
+    })
+  },
+
+  detachStyleFromSelection: (styleId) => {
+    const state = get()
+    set({
+      elements: state.selectedElementIds.reduce((els, id) => {
+        const el = findElementInList(els, id)
+        if (!el) return els
+        return updateElementInList(els, id, detachStyleUpdates(el, styleId))
+      }, state.elements),
+      isDirty: true,
+    })
+  },
+
+  updateStyle: (styleId, updates) => {
+    const state = get()
+    const style = state.styles.find((s) => s.id === styleId)
+    if (!style) return
+    const next = { ...style, ...updates }
+    // re-broadcast to every referencing element (deep)
+    const rebroadcast = (els: DesignElement[]): DesignElement[] =>
+      els.map((el) => {
+        let updated = el
+        if (el.fillStyleId === styleId || el.strokeStyleId === styleId ||
+            el.textStyleId === styleId || el.effectStyleId === styleId) {
+          updated = { ...el, ...applyStyleUpdates(el, next), }
+        }
+        if (el.children) return { ...updated, children: rebroadcast(el.children) }
+        return updated
+      })
+    set({ styles: state.styles.map((s) => (s.id === styleId ? next : s)), elements: rebroadcast(state.elements), isDirty: true })
+  },
+
+  renameStyle: (styleId, name) =>
+    set((state) => ({ styles: state.styles.map((s) => (s.id === styleId ? { ...s, name } : s)), isDirty: true })),
+
+  deleteStyle: (styleId) => {
+    const state = get()
+    const clear = (els: DesignElement[]): DesignElement[] =>
+      els.map((el) => {
+        let updated = el
+        if (el.fillStyleId === styleId || el.strokeStyleId === styleId ||
+            el.textStyleId === styleId || el.effectStyleId === styleId) {
+          updated = { ...el, ...detachStyleUpdates(el, styleId) }
+        }
+        if (el.children) return { ...updated, children: clear(el.children) }
+        return updated
+      })
+    set({ styles: state.styles.filter((s) => s.id !== styleId), elements: clear(state.elements), isDirty: true })
+  },
+
+  loadStyles: (styles) => set({ styles }),
+
+  // ---------- PHASE 8: layout grids -------------------------------------
+  addLayoutGrid: (frameId, pattern) =>
+    set((state) => {
+      const frame = findElementInList(state.elements, frameId)
+      if (!frame) return state
+      const grid: import('@/lib/layout-grids').LayoutGrid =
+        pattern === 'grid'
+          ? { id: generateId('grid'), pattern, visible: true, size: 8, color: '#FF3B30' }
+          : pattern === 'columns'
+            ? { id: generateId('grid'), pattern, visible: true, count: 12, gutter: 16, margin: 32, type: 'stretch', color: '#FF3B30' }
+            : { id: generateId('grid'), pattern, visible: true, count: 6, gutter: 16, margin: 32, type: 'start', color: '#FF3B30' }
+      return {
+        elements: updateElementInList(state.elements, frameId, { layoutGrids: [...(frame.layoutGrids || []), grid] }),
+        isDirty: true,
+      }
+    }),
+
+  updateLayoutGrid: (frameId, gridId, updates) =>
+    set((state) => {
+      const frame = findElementInList(state.elements, frameId)
+      if (!frame || !frame.layoutGrids) return state
+      return {
+        elements: updateElementInList(state.elements, frameId, {
+          layoutGrids: frame.layoutGrids.map((g) => (g.id === gridId ? { ...g, ...updates } : g)),
+        }),
+        isDirty: true,
+      }
+    }),
+
+  removeLayoutGrid: (frameId, gridId) =>
+    set((state) => {
+      const frame = findElementInList(state.elements, frameId)
+      if (!frame || !frame.layoutGrids) return state
+      return {
+        elements: updateElementInList(state.elements, frameId, {
+          layoutGrids: frame.layoutGrids.filter((g) => g.id !== gridId),
+        }),
+        isDirty: true,
+      }
+    }),
+
+  // ---------- PHASE 9: constraints --------------------------------------
+  resizeFrameWithConstraints: (frameId, next) =>
+    set((state) => {
+      const frame = findElementInList(state.elements, frameId)
+      if (!frame) return state
+      const constrainedChildren = constrainChildren(frame, frame.width, frame.height, next.width, next.height)
+      return {
+        elements: updateElementInList(state.elements, frameId, {
+          ...next,
+          ...(constrainedChildren ? { children: constrainedChildren } : {}),
+        }),
+        isDirty: true,
+      }
+    }),
+
+  inferChildConstraints: (childId, parentFrameId) =>
+    set((state) => {
+      const frame = findElementInList(state.elements, parentFrameId)
+      if (!frame || !frame.children) return state
+      const child = frame.children.find((c) => c.id === childId)
+      if (!child) return state
+      const inferred = inferConstraints(child, frame.width, frame.height)
+      return {
+        elements: updateElementInList(state.elements, parentFrameId, {
+          children: frame.children.map((c) => (c.id === childId ? { ...c, constraints: inferred } : c)),
+        }),
+        isDirty: false, // inference is bookkeeping, not a user edit
+      }
+    }),
+
+  // ---------- PHASE 10: text auto-size ---------------------------------
+  applyTextAutoSize: (elementId) =>
+    set((state) => {
+      const el = findElementInList(state.elements, elementId)
+      if (!el || el.type !== 'text') return state
+      const mode = el.textAutoResize || 'fixed'
+      if (mode === 'fixed') return state
+      const m = measureText(
+        {
+          text: el.textContent || '',
+          fontFamily: el.fontFamily || 'Inter',
+          fontSize: el.fontSize || 18,
+          fontWeight: el.fontWeight || 400,
+          lineHeight: el.lineHeight || 1.4,
+          letterSpacing: el.letterSpacing || 0,
+          fontStyle: el.fontStyle,
+        },
+        mode,
+        el.width
+      )
+      const updates: Partial<DesignElement> = { height: Math.max(1, Math.round(m.height)) }
+      if (mode === 'hug') updates.width = Math.max(1, Math.round(m.width))
+      return { elements: updateElementInList(state.elements, elementId, updates), isDirty: true }
+    }),
   setSnapToElements: (snap) => set({ snapToElements: snap }),
   setGridSize: (size) => set({ gridSize: size }),
   setShowRulers: (show) => set({ showRulers: show }),
@@ -1003,11 +1538,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const frame = findElementInList(state.elements, state.currentFrameId)
         if (frame && (frame.type === 'frame' || frame.type === 'group')) {
           const existingChildren = frame.children || []
-          const childElement = {
+          const relChild = {
             ...element,
             x: element.x - frame.x,
             y: element.y - frame.y,
           }
+          // PHASE 9: infer constraints at creation time
+          const childElement = element.constraintsEdited
+            ? relChild
+            : { ...relChild, constraints: inferConstraints(relChild, frame.width, frame.height) }
           return {
             elements: updateElementInList(state.elements, state.currentFrameId, {
               children: [...existingChildren, childElement],
@@ -1231,6 +1770,128 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         .map((el) => el.id),
     })),
 
+  // ---- PHASE 6: Boolean operations & masks (REBUILT per PORT-PLAN-6-11) ----
+  applyBooleanOperation: (op) => {
+    const state = get()
+    // z-order = getAllElements depth-first pre-order (back → front)
+    const all = getAllElements(state.elements)
+    const sel = new Set(state.selectedElementIds)
+    const candidates = all.filter((el) => sel.has(el.id) && isBooleanOperandType(el))
+    if (candidates.length < 2) {
+      return { ok: false, reason: 'Select at least 2 vector shapes (rectangle/ellipse/polygon/star/path)' }
+    }
+
+    // parent chain + absolute ancestor offset per operand (ancestor rotation not unfolded — documented)
+    const findChain = (targetId: string): { chain: DesignElement[]; parent: DesignElement | null } => {
+      const walk = (list: DesignElement[], acc: DesignElement[]): { chain: DesignElement[]; parent: DesignElement | null } | null => {
+        for (const el of list) {
+          if (el.children) {
+            if (el.children.some((c) => c.id === targetId)) return { chain: acc, parent: el }
+            const nested = walk(el.children, [...acc, el])
+            if (nested) return nested
+          }
+        }
+        return null
+      }
+      const direct = state.elements.some((e) => e.id === targetId) ? { chain: [] as DesignElement[], parent: null } : null
+      return direct ?? walk(state.elements, []) ?? { chain: [], parent: null }
+    }
+    const chains = candidates.map((el) => findChain(el.id))
+    const absOffset = (chain: DesignElement[]) => ({
+      x: chain.reduce((s, e) => s + e.x, 0),
+      y: chain.reduce((s, e) => s + e.y, 0),
+    })
+
+    // flatten operands (absolute coords incl. own flip + rotation)
+    const flat: Poly[][] = []
+    for (const el of candidates) {
+      const polys = flattenOperand(el, absOffset(chains[candidates.indexOf(el)].chain))
+      if (!polys) return { ok: false, reason: `unsupported operand: ${el.name} (${el.type})` }
+      flat.push(polys)
+    }
+
+    // fold through evenodd algebra
+    const folded = foldElementPolys(flat, op)
+    if (!Array.isArray(folded)) return { ok: false, reason: (folded as { reason: string }).reason }
+    const loops = folded as Poly[]
+
+    // result element in the BACKMOST operand's parent space (array order = back→front)
+    const backmost = candidates[0]
+    const backChain = chains[0]
+    const parentAbs = absOffset(backChain.chain)
+    const contours = polysToContours(loops, parentAbs)
+    const b = contoursBounds(contours)
+    if (b.width <= 0 || b.height <= 0) return { ok: false, reason: 'result is empty' }
+    const base = op === 'union' ? 'Union' : op === 'subtract' ? 'Subtract' : op === 'intersect' ? 'Intersect' : 'Exclude'
+    const usedCount = all.filter((e) => (e.name || '').startsWith(base)).length
+    const clone = <T,>(v: T): T => (v === undefined ? v : JSON.parse(JSON.stringify(v)))
+
+    const resultEl: DesignElement = {
+      id: generateId('path'),
+      type: 'path',
+      name: usedCount ? `${base} ${usedCount + 1}` : base,
+      x: b.x,
+      y: b.y,
+      width: b.width,
+      height: b.height,
+      fill: backmost.fill,
+      stroke: backmost.stroke,
+      strokeWidth: backmost.strokeWidth,
+      strokeStyle: backmost.strokeStyle,
+      cornerRadius: 0, cornerRadiusTL: 0, cornerRadiusTR: 0, cornerRadiusBL: 0, cornerRadiusBR: 0,
+      opacity: backmost.opacity,
+      rotation: 0,
+      visible: true,
+      locked: false,
+      blendMode: backmost.blendMode || 'normal',
+      fills: clone(backmost.fills),
+      shadows: clone(backmost.shadows),
+      blurs: clone(backmost.blurs),
+      vectorNetwork: contours[0],
+      booleanContours: contours,
+      booleanOperation: op,
+      booleanSourceIds: candidates.map((e) => e.id),
+      pathClosed: true,
+    }
+
+    // remove all operands, insert result at the backmost operand's z-slot
+    let elements = state.elements
+    for (const c of candidates) elements = removeElementFromList(elements, c.id)
+
+    if (backChain.parent) {
+      const parentNow = findElementInList(elements, backChain.parent.id)
+      if (parentNow?.children) {
+        const siblings = backChain.parent.children ?? []
+        const origIdx = siblings.findIndex((c) => c.id === backmost.id)
+        const removedBefore = candidates.filter(
+          (c) => siblings.includes(c) && siblings.indexOf(c) < origIdx
+        ).length
+        const idx = Math.max(0, origIdx - removedBefore)
+        const nextChildren = [...parentNow.children]
+        nextChildren.splice(idx, 0, resultEl)
+        elements = updateElementInList(elements, parentNow.id, { children: nextChildren })
+      } else {
+        elements = [...elements, resultEl]
+      }
+    } else {
+      const origIdx = state.elements.findIndex((e) => e.id === backmost.id)
+      const removedBefore = candidates.filter(
+        (c, i) => chains[i].parent === null && state.elements.indexOf(c) < origIdx
+      ).length
+      const idx = Math.max(0, origIdx - removedBefore)
+      elements = [...elements.slice(0, idx), resultEl, ...elements.slice(idx)]
+    }
+
+    set({ elements, selectedElementIds: [resultEl.id], isDirty: true })
+    return { ok: true, id: resultEl.id }
+  },
+
+  setElementAsMask: (id, isMask) =>
+    set((state) => ({
+      elements: updateElementInList(state.elements, id, { isMask }),
+      isDirty: true,
+    })),
+
   // Page actions
   addPage: (name) =>
     set((state) => {
@@ -1402,6 +2063,24 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   
   loadElements: (elements) => set({ elements, selectedElementIds: [], isDirty: true }),
 
+  importElementsBatch: (newElements) =>
+    set((state) => ({
+      elements: [...state.elements, ...newElements],
+      selectedElementIds: newElements.map((e) => e.id),
+      isDirty: true,
+    })),
+
+  loadImportedProject: (pages, fileName, guides) =>
+    set((state) => ({
+      pages,
+      activePageId: pages[0]?.id ?? state.activePageId,
+      elements: pages[0]?.elements ?? [],
+      fileName: fileName ?? state.fileName,
+      guides: Array.isArray(guides) && guides.length > 0 ? (guides as typeof state.guides) : state.guides,
+      selectedElementIds: [],
+      isDirty: true,
+    })),
+
   loadServerProject: async (projectId: string) => {
     try {
       const res = await fetch(`/api/editor/projects/${projectId}`)
@@ -1410,76 +2089,106 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const project = data.project
       if (!project) throw new Error('Project not found')
 
-      function ensureElement(el: any): DesignElement {
-        const base: DesignElement = {
-          id: el.id || `el-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-          name: el.name || 'Element',
-          type: el.type || 'rectangle',
-          x: el.x ?? 0,
-          y: el.y ?? 0,
-          width: el.width ?? 100,
-          height: el.height ?? 100,
-          fill: el.fill ?? 'transparent',
-          stroke: el.stroke ?? 'transparent',
-          strokeWidth: el.strokeWidth ?? 0,
-          strokeStyle: el.strokeStyle ?? 'solid',
-          cornerRadius: el.cornerRadius ?? 0,
-          cornerRadiusTL: el.cornerRadiusTL ?? 0,
-          cornerRadiusTR: el.cornerRadiusTR ?? 0,
-          cornerRadiusBL: el.cornerRadiusBL ?? 0,
-          cornerRadiusBR: el.cornerRadiusBR ?? 0,
-          opacity: el.opacity ?? 100,
-          rotation: el.rotation ?? 0,
-          visible: el.visible !== false,
-          locked: el.locked === true,
-          blendMode: el.blendMode || 'normal',
-          clipContent: el.clipContent ?? false,
-          flipH: el.flipH ?? false,
-          flipV: el.flipV ?? false,
-        }
-        if (el.type === 'text') {
-          base.textContent = el.textContent ?? 'Text'
-          base.fontFamily = el.fontFamily ?? 'Inter'
-          base.fontSize = el.fontSize ?? 18
-          base.fontWeight = el.fontWeight ?? 400
-          base.fontStyle = el.fontStyle
-          base.textDecoration = el.textDecoration
-          base.textAlign = el.textAlign ?? 'left'
-          base.lineHeight = el.lineHeight ?? 1.4
-          base.letterSpacing = el.letterSpacing ?? 0
-          base.textColor = el.textColor ?? '#000000'
-        }
-        if (el.children && Array.isArray(el.children)) {
-          base.children = el.children.map(ensureElement)
-        }
-        return base
-      }
-
-      const pages = project.pages || []
-      const firstPage = pages[0]
-      const pageElements = firstPage?.elements || project.elements || []
-
-      const converted = pageElements.map(ensureElement)
-      const convertedPages = pages.map((p: any) => ({
-        id: p.id,
-        name: p.name || 'Page 1',
-        elements: (p.elements || []).map(ensureElement),
-      }))
+      const normalized = normalizeServerProject(project)
 
       set({
-        elements: converted,
-        pages: convertedPages.length > 0 ? convertedPages : [{ id: 'page-1', name: 'Page 1', elements: converted }],
-        activePageId: firstPage?.id || 'page-1',
-        fileName: project.name || 'Untitled',
+        elements: normalized.activePageElements,
+        pages: normalized.pages,
+        activePageId: normalized.activePageId,
+        fileName: normalized.name,
         selectedElementIds: [],
-        history: [{ elements: deepCloneElements(converted), selectedElementIds: [] }],
+        styles: (normalized.styles || []) as EditorState['styles'],
+        history: [{ elements: deepCloneElements(normalized.activePageElements), selectedElementIds: [] }],
         historyIndex: 0,
         isDirty: false,
+        currentProjectId: projectId,
+        lastRemoteOrigin: null,
       })
     } catch (err) {
       console.error('loadServerProject failed:', err)
     }
   },
+
+  closeServerProject: () =>
+    set({ currentProjectId: null, syncStatus: 'offline', lastRemoteOrigin: null }),
+
+  // ---- Live sync (SSE) actions -------------------------------------------
+  // Remote changes are merged into the store WITHOUT setting isDirty,
+  // so they never echo back to the server through the autosave push.
+
+  setSyncStatus: (status) => set({ syncStatus: status }),
+
+  applyRemoteElement: (element, pageId) =>
+    set((state) => {
+      const normalized = normalizeServerElement(element)
+      // Skip if already present (e.g. event replay after reconnect)
+      const alreadyActive = state.elements.some((e) => e.id === normalized.id)
+      const targetPageId = pageId || state.activePageId
+      const alreadyInPage = state.pages
+        .find((p) => p.id === targetPageId)
+        ?.elements.some((e) => e.id === normalized.id)
+      if (alreadyActive && alreadyInPage) return {}
+      const isTargetActivePage = targetPageId === state.activePageId
+      return {
+        elements: isTargetActivePage && !alreadyActive
+          ? [...state.elements, normalized]
+          : state.elements,
+        pages: state.pages.map((p) =>
+          p.id === targetPageId && !p.elements.some((e) => e.id === normalized.id)
+            ? { ...p, elements: [...p.elements, normalized] }
+            : p
+        ),
+        isDirty: false,
+      }
+    }),
+
+  applyRemoteElementUpdate: (element, pageId) =>
+    set((state) => {
+      const normalized = normalizeServerElement(element)
+      const targetPageId = pageId || state.activePageId
+      return {
+        elements: updateElementInList(state.elements, normalized.id, normalized),
+        pages: state.pages.map((p) =>
+          p.id === targetPageId
+            ? { ...p, elements: updateElementInList(p.elements, normalized.id, normalized) }
+            : p
+        ),
+        isDirty: false,
+      }
+    }),
+
+  applyRemoteElementDelete: (elementId, pageId) =>
+    set((state) => {
+      const targetPageId = pageId || state.activePageId
+      return {
+        elements: removeElementFromList(state.elements, elementId),
+        pages: state.pages.map((p) =>
+          p.id === targetPageId
+            ? { ...p, elements: removeElementFromList(p.elements, elementId) }
+            : p
+        ),
+        selectedElementIds: state.selectedElementIds.filter((id) => id !== elementId),
+        isDirty: false,
+      }
+    }),
+
+  applyRemoteProject: (project) =>
+    set((state) => {
+      const normalized = normalizeServerProject(project)
+      // Preserve the user's selection when the selected elements still exist.
+      const preservedSelection = state.selectedElementIds.filter((id) =>
+        normalized.activePageElements.some((e) => e.id === id)
+      )
+      return {
+        elements: normalized.activePageElements,
+        pages: normalized.pages,
+        activePageId: normalized.activePageId,
+        fileName: normalized.name,
+        selectedElementIds: preservedSelection,
+        styles: (normalized.styles || []) as EditorState['styles'],
+        isDirty: false,
+      }
+    }),
 
   // Component system
   addComponent: (id) =>
@@ -1841,6 +2550,117 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return { elements: updateElementInList(state.elements, id, { exportSettings }), isDirty: true }
     }),
 
+  // Prototype interactions (PHASE 2)
+  addInteraction: (elementId, interaction) =>
+    set((state) => {
+      const el = findElementInList(state.elements, elementId)
+      if (!el) return state
+      const interactions = [...(el.interactions || []), interaction]
+      return { elements: updateElementInList(state.elements, elementId, { interactions }), isDirty: true }
+    }),
+
+  updateInteraction: (elementId, interactionId, updates) =>
+    set((state) => {
+      const el = findElementInList(state.elements, elementId)
+      if (!el || !el.interactions) return state
+      const interactions = el.interactions.map((i) =>
+        i.id === interactionId
+          ? {
+              ...i,
+              ...updates,
+              trigger: updates.trigger ? { ...i.trigger, ...updates.trigger } : i.trigger,
+              action: updates.action ? { ...i.action, ...updates.action } : i.action,
+              animation: updates.animation ? { ...i.animation, ...updates.animation } : i.animation,
+            }
+          : i
+      )
+      return { elements: updateElementInList(state.elements, elementId, { interactions }), isDirty: true }
+    }),
+
+  removeInteraction: (elementId, interactionId) =>
+    set((state) => {
+      const el = findElementInList(state.elements, elementId)
+      if (!el || !el.interactions) return state
+      const interactions = el.interactions.filter((i) => i.id !== interactionId)
+      return { elements: updateElementInList(state.elements, elementId, { interactions }), isDirty: true }
+    }),
+
+  startPreview: (frameId) =>
+    set((state) => {
+      // Default: the selected top-level frame, else the first frame on the page.
+      // state.elements holds top-level elements only (children are nested),
+      // so this filter already excludes nested frames.
+      const frames = state.elements.filter((el) => el.type === 'frame')
+      const selectedFrame = state.selectedElementIds
+        .map((id) => state.elements.find((el) => el.id === id))
+        .find((el) => el && el.type === 'frame')
+      const start = frameId ?? (selectedFrame && selectedFrame.type === 'frame' ? selectedFrame.id : null) ?? frames[0]?.id ?? null
+      if (!start) return state
+      return {
+        isPreviewing: true,
+        previewFrameId: start,
+        overlayStack: [],
+        previewHistory: [],
+      }
+    }),
+
+  stopPreview: () => set({ isPreviewing: false, overlayStack: [], previewHistory: [] }),
+
+  previewNavigate: (action) =>
+    set((state) => {
+      if (!action) return state
+      switch (action.type) {
+        case 'navigate': {
+          if (!action.destinationId) return state
+          return {
+            previewFrameId: action.destinationId,
+            previewHistory: state.previewFrameId
+              ? [...state.previewHistory, state.previewFrameId]
+              : state.previewHistory,
+            overlayStack: [],
+          }
+        }
+        case 'open-overlay': {
+          if (!action.destinationId) return state
+          return {
+            overlayStack: [
+              ...state.overlayStack,
+              {
+                frameId: action.destinationId,
+                background: action.background || { type: 'none' },
+                closeOnClickOutside: action.closeOnClickOutside ?? true,
+              },
+            ],
+          }
+        }
+        case 'close-overlay': {
+          if (state.overlayStack.length === 0) return state
+          return { overlayStack: state.overlayStack.slice(0, -1) }
+        }
+        case 'back': {
+          if (state.overlayStack.length > 0) {
+            // back inside overlays closes the innermost one first (Figma behavior)
+            return { overlayStack: state.overlayStack.slice(0, -1) }
+          }
+          if (state.previewHistory.length === 0) return state
+          const history = [...state.previewHistory]
+          const previous = history.pop()!
+          return { previewFrameId: previous, previewHistory: history }
+        }
+        case 'url': {
+          if (action.url) {
+            if (typeof window !== 'undefined') {
+              if (action.newTab) window.open(action.url, '_blank', 'noopener')
+              else window.location.href = action.url
+            }
+          }
+          return state
+        }
+        default:
+          return state
+      }
+    }),
+
   // Transform
   setBlendMode: (id, mode) =>
     set((state) => ({
@@ -2123,9 +2943,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         y: absY - frameAbsY,
       }
 
+      // PHASE 9: infer constraints from the child's position in its new frame
+      // (auto-inference from creation/drop position — manual edits later win)
+      const withConstraints = childElement.constraintsEdited
+        ? childElement
+        : { ...childElement, constraints: inferConstraints(childElement, updatedFrame.width, updatedFrame.height) }
+
       // Add element to frame's children
       const existingChildren = updatedFrame.children || []
-      const newChildren = [...existingChildren, childElement]
+      const newChildren = [...existingChildren, withConstraints]
       const newElements = updateElementInList(elementsWithout, frameId, { children: newChildren })
 
       return {

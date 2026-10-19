@@ -1,7 +1,14 @@
 'use client'
 
+/**
+ * PHASE 8 — Rulers: unit-aware (px / in / cm / mm @ DPI 72) with adaptive
+ * tick stepping (majors kept ≥ ~64 screen px apart, minors 1/5 of major).
+ * Drag from a ruler to create guides (behavior unchanged from before).
+ */
+
 import React, { useCallback, useRef } from 'react'
 import { useEditorStore, Guide } from '@/store/editor-store'
+import { PX_PER_UNIT, rulerTickSteps, type RulerUnit } from '@/lib/layout-grids'
 
 interface RulersProps {
   containerWidth: number
@@ -12,35 +19,27 @@ interface RulersProps {
 }
 
 const RULER_SIZE = 24
-const TICK_INTERVAL = 100
+
+function fmtLabel(unitValue: number, unit: RulerUnit): string {
+  if (unit === 'px') return String(Math.round(unitValue))
+  // in/cm: 2 decimals trimmed; mm: 1 decimal trimmed
+  const s = unitValue.toFixed(unit === 'mm' ? 1 : 2)
+  return s.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')
+}
 
 export function Rulers({ containerWidth, containerHeight, zoom, panX, panY }: RulersProps) {
-  const { guides, addGuide, showRulers } = useEditorStore()
+  const { guides, addGuide, showRulers, rulerUnit } = useEditorStore()
   const isDraggingGuide = useRef<{ orientation: 'horizontal' | 'vertical'; startPos: number } | null>(null)
 
   const canvasToScreen = useCallback(
     (canvasX: number, canvasY: number) => {
       const cx = containerWidth / 2 + panX
       const cy = containerHeight / 2 + panY
-      return {
-        x: cx + canvasX * zoom,
-        y: cy + canvasY * zoom,
-      }
+      return { x: cx + canvasX * zoom, y: cy + canvasY * zoom }
     },
     [containerWidth, containerHeight, zoom, panX, panY]
   )
-
-  const screenToCanvas = useCallback(
-    (screenX: number, screenY: number) => {
-      const cx = containerWidth / 2 + panX
-      const cy = containerHeight / 2 + panY
-      return {
-        x: (screenX - cx) / zoom,
-        y: (screenY - cy) / zoom,
-      }
-    },
-    [containerWidth, containerHeight, zoom, panX, panY]
-  )
+  void canvasToScreen
 
   if (!showRulers) return null
 
@@ -52,7 +51,7 @@ export function Rulers({ containerWidth, containerHeight, zoom, panX, panY }: Ru
     const rect = (e.target as HTMLElement).getBoundingClientRect()
     const startPos = orientation === 'horizontal' ? e.clientY - rect.top : e.clientX - rect.left
 
-    const handleMove = (moveEvent: MouseEvent) => {
+    const handleMove = (_moveEvent: MouseEvent) => {
       // Visual feedback - guide follows cursor
     }
 
@@ -76,39 +75,41 @@ export function Rulers({ containerWidth, containerHeight, zoom, panX, panY }: Ru
     document.addEventListener('mouseup', handleUp)
   }
 
-  // Generate tick marks for horizontal ruler
-  const hTicks: { pos: number; label: string; isMajor: boolean }[] = []
-  const startX = -cx / zoom
-  const endX = (containerWidth - cx) / zoom
-  const majorStep = TICK_INTERVAL
-  const minorStep = majorStep / 5
+  // --- Adaptive, unit-aware tick generation ------------------------------
+  const unit = rulerUnit as RulerUnit
+  const { major, minor } = rulerTickSteps(unit, zoom)
+  const pxPerUnit = PX_PER_UNIT[unit]
 
-  for (let v = Math.floor(startX / majorStep) * majorStep; v <= endX; v += minorStep) {
-    const screenX = cx + v * zoom
-    if (screenX < RULER_SIZE) continue
-    const isMajor = Math.abs(v % majorStep) < minorStep / 2
-    hTicks.push({
-      pos: screenX,
-      label: isMajor ? String(Math.round(v)) : '',
-      isMajor,
-    })
+  const makeTicks = (startPx: number, endPx: number) => {
+    // startPx/endPx in CANVAS px; ticks computed in UNIT space
+    const startU = startPx / pxPerUnit
+    const endU = endPx / pxPerUnit
+    const ticks: { pos: number; label: string; isMajor: boolean }[] = []
+    const first = Math.floor(startU / minor) * minor
+    // guard against runaway loops at extreme zoom/unit combos
+    const maxTicks = 4000
+    let count = 0
+    for (let v = first; v <= endU && count < maxTicks; v += minor, count++) {
+      // snap floating accumulation error
+      const snapped = Math.round(v / minor) * minor
+      const screenPos = cx === undefined ? 0 : 0 // placeholder, set by caller
+      void screenPos
+      const isMajor = Math.abs(snapped % major) < minor / 2
+      ticks.push({ pos: snapped, label: isMajor ? fmtLabel(snapped, unit) : '', isMajor })
+    }
+    return ticks
   }
 
-  // Generate tick marks for vertical ruler
-  const vTicks: { pos: number; label: string; isMajor: boolean }[] = []
-  const startY = -cy / zoom
-  const endY = (containerHeight - cy) / zoom
+  const screenFor = (canvasPx: number, axis: 'x' | 'y') =>
+    axis === 'x' ? cx + canvasPx * zoom : cy + canvasPx * zoom
 
-  for (let v = Math.floor(startY / majorStep) * majorStep; v <= endY; v += minorStep) {
-    const screenY = cy + v * zoom
-    if (screenY < RULER_SIZE) continue
-    const isMajor = Math.abs(v % majorStep) < minorStep / 2
-    vTicks.push({
-      pos: screenY,
-      label: isMajor ? String(Math.round(v)) : '',
-      isMajor,
-    })
-  }
+  const hStart = -cx / zoom
+  const hEnd = (containerWidth - cx) / zoom
+  const hTicks = makeTicks(hStart, hEnd).map((t) => ({ ...t, pos: screenFor(t.pos * pxPerUnit, 'x') }))
+
+  const vStart = -cy / zoom
+  const vEnd = (containerHeight - cy) / zoom
+  const vTicks = makeTicks(vStart, vEnd).map((t) => ({ ...t, pos: screenFor(t.pos * pxPerUnit, 'y') }))
 
   return (
     <>
@@ -201,11 +202,14 @@ export function Rulers({ containerWidth, containerHeight, zoom, panX, panY }: Ru
         </svg>
       </div>
 
-      {/* Corner square */}
+      {/* Corner square with unit label */}
       <div
-        className="absolute top-0 left-0 bg-[#2A2A2A] border-r border-b border-[#383838] z-40"
+        className="absolute top-0 left-0 bg-[#2A2A2A] border-r border-b border-[#383838] z-40 flex items-center justify-center"
         style={{ width: RULER_SIZE, height: RULER_SIZE }}
-      />
+        title={`Ruler unit: ${unit} (DPI 72)`}
+      >
+        <span className="text-[8px] text-[#888] uppercase">{unit}</span>
+      </div>
     </>
   )
 }

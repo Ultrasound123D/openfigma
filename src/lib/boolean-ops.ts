@@ -1,264 +1,226 @@
-import { DesignElement } from '@/store/editor-store'
+/**
+ * boolean-ops.ts — PHASE 6 adapter (REBUILT per PORT-PLAN-6-11.md)
+ * Element-level boolean operations + mask geometry, on top of the pure
+ * polygon-clip.ts math (62/62 unit-tested in scripts/test_polygon_clip.mjs).
+ *
+ * Semantics (documented decisions — no Figma source copy, LOST-SOURCE):
+ * - Operands: rectangle / ellipse / polygon / star / path only (vector shapes).
+ *   Lines, text, images, frames, groups, components are rejected with reason.
+ * - Result: single element of type 'path' carrying `booleanContours`
+ *   (VectorNetwork[], rendered fillRule=evenodd) + provenance
+ *   (`booleanOperation`, `booleanSourceIds` — previously dead fields, now live).
+ * - Paint (fill/stroke/effects) inherited from the BACKMOST operand (array order).
+ * - Result is inserted at the backmost operand's z-slot inside its parent.
+ * - Masks: `isMask` clips all PREVIOUS siblings (+ the mask itself) within the
+ *   same parent. Mask operand types: rectangle/ellipse/polygon/star/path.
+ */
 
-// Simplified boolean operations using SVG path approximation
-// For production, a proper polygon clipping library would be better
+import type { DesignElement, VectorNetwork } from '@/store/editor-store'
+import type { Poly, Pt, BooleanOp } from '@/lib/polygon-clip'
+import {
+  foldOp, normalizeLoops, ensureCCW,
+} from '@/lib/polygon-clip'
+import { getVectorNetwork } from '@/lib/element-utils'
 
-interface Point {
-  x: number
-  y: number
+export type { BooleanOp }
+
+const MASKABLE_TYPES = new Set(['rectangle', 'ellipse', 'polygon', 'star', 'path'])
+const OPERAND_TYPES = MASKABLE_TYPES
+
+export type BooleanFailure = { ok: false; reason: string }
+
+/** Eligibility check shared by store action + UI gating. */
+export function isBooleanOperandType(el: DesignElement): boolean {
+  return OPERAND_TYPES.has(el.type) && el.visible !== false
 }
 
-function getElementPath(el: DesignElement): Point[] {
+/* ---------- geometry sampling (mirrors renderShape in Canvas.tsx exactly) ---------- */
+
+function sampleQuarterArc(cx: number, cy: number, r: number, a0: number, a1: number, steps = 6): Pt[] {
+  const out: Pt[] = []
+  for (let i = 1; i <= steps; i++) {
+    const a = a0 + (a1 - a0) * (i / steps)
+    out.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) })
+  }
+  return out
+}
+
+/** Local-coordinate polygon(s) for a shape element (before flip/rot/translate). */
+function localShapePolys(el: DesignElement): Poly[] | null {
+  const w = el.width
+  const h = el.height
+  if (w <= 0 || h <= 0) return null
   switch (el.type) {
-    case 'rectangle':
-    case 'frame': {
-      const r = el.cornerRadius || 0
-      if (r > 0) {
-        return getRoundedRectPoints(el.width, el.height, r)
+    case 'rectangle': {
+      const r = Math.min(el.cornerRadius || 0, w / 2, h / 2)
+      if (r <= 0.01) {
+        return [[{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }]]
       }
-      return [
-        { x: el.x, y: el.y },
-        { x: el.x + el.width, y: el.y },
-        { x: el.x + el.width, y: el.y + el.height },
-        { x: el.x, y: el.y + el.height },
-      ]
+      const pts: Pt[] = []
+      // start at (r,0), walk CCW: bottom-right corner, right edge, etc.
+      pts.push({ x: r, y: 0 })
+      pts.push(...sampleQuarterArc(w - r, r, r, -Math.PI / 2, 0))        // br corner
+      pts.push({ x: w, y: r })
+      pts.push(...sampleQuarterArc(w - r, h - r, r, 0, Math.PI / 2))     // tr
+      pts.push({ x: w - r, y: h })
+      pts.push(...sampleQuarterArc(r, h - r, r, Math.PI / 2, Math.PI))    // tl
+      pts.push({ x: 0, y: h - r })
+      pts.push(...sampleQuarterArc(r, r, r, Math.PI, Math.PI * 1.5))     // bl
+      return [pts]
     }
     case 'ellipse': {
-      return getEllipsePoints(el.x + el.width / 2, el.y + el.height / 2, el.width / 2, el.height / 2)
+      const cx = w / 2
+      const cy = h / 2
+      const n = 48
+      const pts: Pt[] = []
+      for (let i = 0; i < n; i++) {
+        const a = (i * 2 * Math.PI) / n - Math.PI / 2
+        pts.push({ x: cx + (w / 2) * Math.cos(a), y: cy + (h / 2) * Math.sin(a) })
+      }
+      return [pts]
     }
     case 'polygon': {
-      return getPolygonPoints(el)
+      const sides = el.sides || 6
+      const cx = w / 2
+      const cy = h / 2
+      const r = Math.min(w, h) / 2
+      const pts: Pt[] = []
+      for (let i = 0; i < sides; i++) {
+        const a = (i * 2 * Math.PI) / sides - Math.PI / 2
+        pts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) })
+      }
+      return [pts]
     }
     case 'star': {
-      return getStarPoints(el)
-    }
-    default:
-      return [
-        { x: el.x, y: el.y },
-        { x: el.x + el.width, y: el.y },
-        { x: el.x + el.width, y: el.y + el.height },
-        { x: el.x, y: el.y + el.height },
-      ]
-  }
-}
-
-function getRoundedRectPoints(w: number, h: number, r: number): Point[] {
-  const points: Point[] = []
-  const segments = 8
-  r = Math.min(r, w / 2, h / 2)
-  // Top-left corner
-  for (let i = segments; i >= 0; i--) {
-    const angle = (Math.PI / 2) * (i / segments) + Math.PI
-    points.push({ x: r + r * Math.cos(angle), y: r + r * Math.sin(angle) })
-  }
-  // Top-right corner
-  for (let i = segments; i >= 0; i--) {
-    const angle = (Math.PI / 2) * (i / segments) + 1.5 * Math.PI
-    points.push({ x: w - r + r * Math.cos(angle), y: r + r * Math.sin(angle) })
-  }
-  // Bottom-right corner
-  for (let i = segments; i >= 0; i--) {
-    const angle = (Math.PI / 2) * (i / segments)
-    points.push({ x: w - r + r * Math.cos(angle), y: h - r + r * Math.sin(angle) })
-  }
-  // Bottom-left corner
-  for (let i = segments; i >= 0; i--) {
-    const angle = (Math.PI / 2) * (i / segments) + Math.PI / 2
-    points.push({ x: r + r * Math.cos(angle), y: h - r + r * Math.sin(angle) })
-  }
-  return points.map(p => ({ x: p.x, y: p.y }))
-}
-
-function getEllipsePoints(cx: number, cy: number, rx: number, ry: number): Point[] {
-  const points: Point[] = []
-  const segments = 32
-  for (let i = 0; i < segments; i++) {
-    const angle = (2 * Math.PI * i) / segments
-    points.push({ x: cx + rx * Math.cos(angle), y: cy + ry * Math.sin(angle) })
-  }
-  return points
-}
-
-function getPolygonPoints(el: DesignElement): Point[] {
-  const sides = el.sides || 6
-  const cx = el.x + el.width / 2
-  const cy = el.y + el.height / 2
-  const r = Math.min(el.width, el.height) / 2
-  const points: Point[] = []
-  for (let i = 0; i < sides; i++) {
-    const angle = (i * 2 * Math.PI) / sides - Math.PI / 2
-    points.push({ x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) })
-  }
-  return points
-}
-
-function getStarPoints(el: DesignElement): Point[] {
-  const sides = el.sides || 5
-  const innerRadiusPercent = el.innerRadius || 40
-  const cx = el.x + el.width / 2
-  const cy = el.y + el.height / 2
-  const outerR = Math.min(el.width, el.height) / 2
-  const innerR = outerR * (innerRadiusPercent / 100)
-  const points: Point[] = []
-  for (let i = 0; i < sides * 2; i++) {
-    const angle = (i * Math.PI) / sides - Math.PI / 2
-    const r = i % 2 === 0 ? outerR : innerR
-    points.push({ x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) })
-  }
-  return points
-}
-
-function pointsToPathD(points: Point[]): string {
-  if (points.length === 0) return ''
-  let d = `M ${points[0].x} ${points[0].y}`
-  for (let i = 1; i < points.length; i++) {
-    d += ` L ${points[i].x} ${points[i].y}`
-  }
-  d += ' Z'
-  return d
-}
-
-// Sutherland-Hodgman polygon clipping for intersection
-function clipPolygon(subject: Point[], clip: Point[]): Point[] {
-  if (subject.length === 0 || clip.length === 0) return []
-  
-  let output = [...subject]
-  
-  for (let i = 0; i < clip.length; i++) {
-    if (output.length === 0) return []
-    const input = [...output]
-    output = []
-    
-    const edgeStart = clip[i]
-    const edgeEnd = clip[(i + 1) % clip.length]
-    
-    for (let j = 0; j < input.length; j++) {
-      const current = input[j]
-      const previous = input[(j + input.length - 1) % input.length]
-      
-      const currentInside = isInside(current, edgeStart, edgeEnd)
-      const previousInside = isInside(previous, edgeStart, edgeEnd)
-      
-      if (currentInside) {
-        if (!previousInside) {
-          const intersection = lineIntersection(previous, current, edgeStart, edgeEnd)
-          if (intersection) output.push(intersection)
-        }
-        output.push(current)
-      } else if (previousInside) {
-        const intersection = lineIntersection(previous, current, edgeStart, edgeEnd)
-        if (intersection) output.push(intersection)
+      const sides = el.sides || 5
+      const innerRadiusPercent = el.innerRadius || 40
+      const cx = w / 2
+      const cy = h / 2
+      const outerR = Math.min(w, h) / 2
+      const innerR = outerR * (innerRadiusPercent / 100)
+      const pts: Pt[] = []
+      for (let i = 0; i < sides * 2; i++) {
+        const a = (i * Math.PI) / sides - Math.PI / 2
+        const r = i % 2 === 0 ? outerR : innerR
+        pts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) })
       }
+      return [pts]
+    }
+    case 'path': {
+      const contours: VectorNetwork[] = el.booleanContours?.length
+        ? el.booleanContours
+        : [getVectorNetwork(el)]
+      const out: Poly[] = []
+      for (const net of contours) {
+        if (!net || !net.segments?.length || !net.vertices?.length) continue
+        const poly: Pt[] = []
+        const first = net.vertices[net.segments[0].start]
+        poly.push({ x: first.x, y: first.y })
+        for (const seg of net.segments) {
+          const s = net.vertices[seg.start]
+          const e = net.vertices[seg.end]
+          const hasT = seg.tangentStart || seg.tangentEnd
+          const isLine = !hasT || (
+            (!seg.tangentStart || (seg.tangentStart.x === 0 && seg.tangentStart.y === 0)) &&
+            (!seg.tangentEnd || (seg.tangentEnd.x === 0 && seg.tangentEnd.y === 0))
+          )
+          if (isLine) {
+            poly.push({ x: e.x, y: e.y })
+          } else {
+            // sample cubic: control points = tangent-relative offsets from endpoints
+            const ts = seg.tangentStart ? { x: s.x + seg.tangentStart.x, y: s.y + seg.tangentStart.y } : { x: s.x, y: s.y }
+            const te = seg.tangentEnd ? { x: e.x + seg.tangentEnd.x, y: e.y + seg.tangentEnd.y } : { x: e.x, y: e.y }
+            for (let k = 1; k <= 12; k++) {
+              const t = k / 12
+              const mt = 1 - t
+              const x = mt * mt * mt * s.x + 3 * mt * mt * t * ts.x + 3 * mt * t * t * te.x + t * t * t * e.x
+              const y = mt * mt * mt * s.y + 3 * mt * mt * t * ts.y + 3 * mt * t * t * te.y + t * t * t * e.y
+              poly.push({ x, y })
+            }
+          }
+        }
+        if (poly.length >= 3) out.push(poly)
+      }
+      return out.length ? out : null
+    }
+    default:
+      return null
+  }
+}
+
+/** Apply flip mirror + rotation (matching SVG render transform order) then translate. */
+function toAbsolute(poly: Poly, el: DesignElement, ax: number, ay: number): Poly {
+  const cx = el.width / 2
+  const cy = el.height / 2
+  const th = ((el.rotation || 0) * Math.PI) / 180
+  const cos = Math.cos(th)
+  const sin = Math.sin(th)
+  const sx = el.flipH ? -1 : 1
+  const sy = el.flipV ? -1 : 1
+  return poly.map((p) => {
+    // mirror about center (matches renderShape flip transform)
+    let x = p.x
+    let y = p.y
+    if (sx === -1) x = el.width - x
+    if (sy === -1) y = el.height - y
+    // rotate about center
+    const dx = x - cx
+    const dy = y - cy
+    const rx = cx + dx * cos - dy * sin
+    const ry = cy + dx * sin + dy * cos
+    return { x: rx + el.x + ax, y: ry + el.y + ay }
+  })
+}
+
+/** Flatten an operand to absolute-coordinate Polys; null if unsupported. */
+export function flattenOperand(el: DesignElement, absAncestor: { x: number; y: number }): Poly[] | null {
+  if (!OPERAND_TYPES.has(el.type)) return null
+  if (!el.visible) return null
+  const local = localShapePolys(el)
+  if (!local) return null
+  return local.map((poly) => toAbsolute(ensureCCW(poly), el, absAncestor.x, absAncestor.y))
+}
+
+/** Build booleanContours (VectorNetwork[]) from absolute Polys relative to origin. */
+export function polysToContours(polys: Poly[], origin: { x: number; y: number }): VectorNetwork[] {
+  return polys.map((poly) => {
+    const vertices = poly.map((p) => ({ x: p.x - origin.x, y: p.y - origin.y }))
+    const segments = poly.map((_, i) => ({ start: i, end: (i + 1) % poly.length }))
+    return { vertices, segments, closed: true }
+  })
+}
+
+/** Contour bounds for placing the result element. */
+export function contoursBounds(contours: VectorNetwork[]): { x: number; y: number; width: number; height: number } {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const c of contours) {
+    for (const v of c.vertices) {
+      if (v.x < minX) minX = v.x
+      if (v.y < minY) minY = v.y
+      if (v.x > maxX) maxX = v.x
+      if (v.y > maxY) maxY = v.y
     }
   }
-  
-  return output
+  if (!isFinite(minX)) return { x: 0, y: 0, width: 0, height: 0 }
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
 }
 
-function isInside(point: Point, edgeStart: Point, edgeEnd: Point): boolean {
-  return (edgeEnd.x - edgeStart.x) * (point.y - edgeStart.y) - 
-         (edgeEnd.y - edgeStart.y) * (point.x - edgeStart.x) >= 0
-}
-
-function lineIntersection(p1: Point, p2: Point, p3: Point, p4: Point): Point | null {
-  const x1 = p1.x, y1 = p1.y, x2 = p2.x, y2 = p2.y
-  const x3 = p3.x, y3 = p3.y, x4 = p4.x, y4 = p4.y
-  
-  const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
-  if (Math.abs(denom) < 1e-10) return null
-  
-  const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
-  
-  return {
-    x: x1 + t * (x2 - x1),
-    y: y1 + t * (y2 - y1),
+/**
+ * Core element-level fold across operands (already flattened, absolute coords).
+ * Returns normalized loops or a failure.
+ */
+export function foldElementPolys(operandPolys: Poly[][], op: BooleanOp): Poly[] | BooleanFailure {
+  let acc: Poly[] = operandPolys[0]
+  for (let i = 1; i < operandPolys.length; i++) {
+    for (const loop of operandPolys[i]) {
+      const r = foldOp(acc, loop, op)
+      if (r === null) {
+        return { ok: false, reason: `degenerate geometry at operand #${i + 1} (try nudging shapes)` }
+      }
+      acc = r
+    }
   }
-}
-
-export function booleanUnion(elements: DesignElement[]): string {
-  // Union: return merged path using the bounding box approach
-  const allPoints: Point[] = []
-  for (const el of elements) {
-    allPoints.push(...getElementPath(el))
-  }
-  // Simple convex hull for union
-  return pointsToPathD(convexHull(allPoints))
-}
-
-export function booleanSubtract(elements: DesignElement[]): string {
-  // Subtract: first element minus the rest
-  if (elements.length < 2) return ''
-  const subject = getElementPath(elements[0])
-  const clip = getElementPath(elements[1])
-  // Invert the clip and intersect
-  const result = clipPolygon(subject, clip)
-  // Return the subject minus intersection - simplified approach
-  if (result.length > 0) {
-    // For subtraction, we use the difference
-    return pointsToPathD(subject) // Simplified - full subtraction would need complex path operations
-  }
-  return pointsToPathD(subject)
-}
-
-export function booleanIntersect(elements: DesignElement[]): string {
-  if (elements.length < 2) return ''
-  let result = getElementPath(elements[0])
-  for (let i = 1; i < elements.length; i++) {
-    result = clipPolygon(result, getElementPath(elements[i]))
-    if (result.length === 0) break
-  }
-  return pointsToPathD(result)
-}
-
-export function booleanExclude(elements: DesignElement[]): string {
-  // XOR: combine all paths, excluding overlapping regions
-  if (elements.length < 2) return ''
-  const path1 = getElementPath(elements[0])
-  const path2 = getElementPath(elements[1])
-  // Simplified: return both paths
-  return pointsToPathD(path1) + ' ' + pointsToPathD(path2)
-}
-
-function convexHull(points: Point[]): Point[] {
-  if (points.length <= 3) return points
-  
-  const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y)
-  const cross = (O: Point, A: Point, B: Point) =>
-    (A.x - O.x) * (B.y - O.y) - (A.y - O.y) * (B.x - O.x)
-
-  const lower: Point[] = []
-  for (const point of sorted) {
-    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0)
-      lower.pop()
-    lower.push(point)
-  }
-
-  const upper: Point[] = []
-  for (const point of sorted.reverse()) {
-    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0)
-      upper.pop()
-    upper.push(point)
-  }
-
-  upper.pop()
-  lower.pop()
-  return lower.concat(upper)
-}
-
-export function getBooleanOperationPath(
-  elements: DesignElement[],
-  operation: string
-): string {
-  switch (operation) {
-    case 'union':
-      return booleanUnion(elements)
-    case 'subtract':
-      return booleanSubtract(elements)
-    case 'intersect':
-      return booleanIntersect(elements)
-    case 'exclude':
-      return booleanExclude(elements)
-    default:
-      return booleanUnion(elements)
-  }
+  const norm = normalizeLoops(acc)
+  if (!norm.length) return { ok: false, reason: 'result is empty' }
+  return norm
 }

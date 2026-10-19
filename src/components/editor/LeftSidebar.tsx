@@ -6,6 +6,7 @@ import { useEditorStore, DesignElement } from '@/store/editor-store'
 import { LayerPanel } from './LayerPanel'
 import { ComponentPanel } from './ComponentPanel'
 import { UITemplatesPanel } from './UITemplatesPanel'
+import { StylesPanel } from './StylesPanel'
 
 export function LeftSidebar() {
   const { leftTab, setLeftTab, pages, activePageId, addPage, deletePage, renamePage, setActivePage, duplicatePage, reorderPages, elements } = useEditorStore()
@@ -234,6 +235,18 @@ export function LeftSidebar() {
           <div className="p-3 border-b border-[#383838]">
             <h3 className="text-[10px] font-semibold text-[#888] uppercase tracking-wider mb-2">Local Components</h3>
             <ComponentPanel />
+          </div>
+
+          {/* PHASE 7 — Project styles */}
+          <div className="border-b border-[#383838]">
+            <div className="flex items-center gap-1.5 px-3 py-1.5">
+              <svg width="12" height="12" viewBox="0 0 10 10" className="text-[#888]" fill="currentColor">
+                <circle cx="2" cy="2" r="1.15" /><circle cx="8" cy="2" r="1.15" />
+                <circle cx="5" cy="5" r="1.15" /><circle cx="2" cy="8" r="1.15" /><circle cx="8" cy="8" r="1.15" />
+              </svg>
+              <h3 className="text-[10px] font-semibold text-[#888] uppercase tracking-wider">Styles</h3>
+            </div>
+            <StylesPanel />
           </div>
 
           {/* UI Templates section */}

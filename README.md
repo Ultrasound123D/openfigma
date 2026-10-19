@@ -8,6 +8,23 @@
 
 ---
 
+## ✨ What's new in v0.3.0
+
+Phases 6–11 closed the remaining Figma-parity gaps. On top of v0.2.0 (tokens, prototype, export, import):
+
+| Phase | Delivered |
+|---|---|
+| 6 — Boolean & masks | Union/subtract/intersect/exclude (Greiner-Hormann clipping) + `isMask` frame masks |
+| 7 — Styles | Project-level paint / text / effect styles: create-from-selection, apply, detach, rename, live re-broadcast, usage counters, Styles panel in Assets |
+| 8 — Layout grids & view options | Per-frame Columns/Rows/Grid × Stretch/Center/Start/End/Min/Max, pixel grid (⌘', ≥400%), snap-to-pixels (⇧⌘'), layout-grid visibility (⌘\), View options popup, unit-aware rulers (px/in/cm/mm @ DPI 72) |
+| 9 — Constraints | left/center/right/left-right + top/center/bottom/top-bottom child behavior on frame resize (handles + numeric panel), auto-inference from creation position, Figma-style 9-box picker |
+| 10 — Text & paint depth | `textAutoResize` fixed/hug/grow with real canvas measurement + word wrap, `textCase` (upper/lower/title), strikethrough, image fill modes Fill/Fit/Crop (scale + offset) |
+| 11 — Precision tools | Scale tool (K) scaling geometry + fonts + corners + effects + auto-layout recursively, Deep select (⌘-click), alt+hover distance measurement |
+
+All phases closed with `tsc --noEmit` + `eslint` + `next build` at zero errors, live browser verification and VLM-checked screenshots (`download/openfigma-p{6..11}-*.png`).
+
+---
+
 ## 📖 How it started
 
 The idea began in December 2025 as an experiment to understand **how real design editors work from the inside**:
@@ -45,7 +62,7 @@ The idea began in December 2025 as an experiment to understand **how real design
 │  IndexedDB (auto-save 30s) + JSON on server        │
 └────────────────────────────────────────────────────┘
         ▲
-        │  HTTP (25+ API routes)
+        │  HTTP (8 API routes)
         │
    MCP Server ──── AI agent (Claude / opencode / Cursor)
 ```
@@ -63,14 +80,17 @@ Everything on the canvas is a `DesignElement` — a tree linked by `parentId`:
 4. Selective re-render via selectors — no full tree re-paint
 
 ### Ready-to-use feature set
+- **Design system (UI3 parity)** — Figma `--fig-*` token set in `globals.css`: typography scale (9–13px, 450/550 weights), radius 2/5/13px, spacers 4–40px, elevation 100–500, and UI3 dimensions (32×32 tool buttons, 48px toolbar pill, 241/320px panels, 28px layer rows)
 - **Editing** — single/multi select + rubber band, 8 resize handles, 15° rotation (Shift), Alt+Drag duplicate
 - **Smart guides** — red dashed alignment lines, 6px grid snap, Alt+Hover distance measurement
 - **Inline text** — double-click to edit text directly on the canvas
 - **Boolean ops** — Union / Subtract / Intersect / Exclude on vector paths
 - **Auto Layout** — direction, gap, padding, alignment, sizing modes
 - **Components & variants** — create/instance/detach, document colors and fonts panels
-- **Export** — PNG / SVG / PDF via `ExportPanel` or the API
-- **Multi-page system**, prototype interaction builder, CSS code generation in the Inspect tab
+- **Export** — PNG / JPG / SVG / PDF / WEBP via `ExportPanel` (per-element, scale 1x/2x/4x, adjustable quality for JPG/WEBP) or the API
+- **Prototype system** — interaction model with 5 triggers (click/hover/drag/keypress/delay) × 5 actions (navigate/open-overlay/close-overlay/url/back) × 8 animations incl. **Smart Animate** (name-path matching between frames), a fullscreen player (`▶` in the TopBar, Esc to exit, back stack) and a full interactions builder in the Prototype tab
+- **Import** — images (picker or unified drag & drop), SVG files parsed with DOMParser into an editable `DesignElement` tree (not a flat image), and project JSON (replace or merge)
+- **Multi-page system**, CSS code generation in the Inspect tab
 - **Undo/Redo** — snapshot history pushed from 25+ call sites
 
 ### Dual persistence layer
@@ -79,7 +99,7 @@ Everything on the canvas is a `DesignElement` — a tree linked by `parentId`:
 | Browser | `storage.ts` → IndexedDB | auto-save every 30s, loaded on start |
 | Server | `server-state.ts` → `.design-data/<id>.json` | single source of truth for API + MCP |
 
-The same data flows through 8 Next.js App Router API routes (`/api/designs`, `/api/export`, `/api/editor/projects/...`) — this is what makes the editor scriptable and AI-controllable.
+The same data flows through 8 Next.js App Router API routes under `/api/editor/projects/...` (projects, elements, pages, tools, SSE events) — this is what makes the editor scriptable and AI-controllable.
 
 ---
 
@@ -90,7 +110,7 @@ npm install      # dependencies
 npm run dev      # dev server on http://localhost:3000
 ```
 
-- No database setup needed — a demo design ("VidVerse") loads automatically on the first visit
+- No database setup needed — a prototype-demo scene (iPhone 16 frame + a Home→Detail flow you can play with `▶`) loads on the first visit; the fuller "VidVerse" app design is available via **File → Load Demo Design**
 - Requires Node 18+
 
 ---
@@ -114,6 +134,14 @@ API Routes (Next.js)  ──►  server-state.ts  ──►  .design-data/<id>.j
 Design updated & saved — the app shows it live
 ```
 
+**Live sync is real:** mutation routes publish change events to an in-memory
+bus (`src/lib/events/bus.ts`) and every open editor tab subscribes to its
+project via SSE at `GET /api/editor/projects/:id/events?clientId=<tab-id>`.
+Remote changes (MCP/AI, other tabs) are merged into the canvas instantly —
+each event carries an `origin`, so a tab never receives echoes of its own
+writes. The TopBar shows a ● Live / Sync… / Offline indicator while a server
+project is open.
+
 > ⚠️ The editor server must be running (`npm run dev`) on port 3000 — MCP talks to it over HTTP.
 
 ### Step 1 — Build the MCP server
@@ -122,22 +150,22 @@ cd mcp-server
 npm install
 npm run build     # produces mcp-server/dist/index.js
 ```
-> The repo ships with `dist` already built — you may skip this step.
+> The MCP server is **not** pre-built in this repo — its dependencies are installed separately from the main app, so run the three commands above once before first use.
 
 ### Step 2 — Configure the connection
-`mcp-config.json` at the project root:
+`mcp-config.json` at the project root (ships with a portable relative path — run the MCP client from the repo root):
 ```json
 {
   "mcpServers": {
     "figma-editor": {
       "command": "node",
-      "args": ["C:\\Users\\HP\\Desktop\\figma_project (1)\\mcp-server\\dist\\index.js"],
+      "args": ["mcp-server/dist/index.js"],
       "env": { "EDITOR_API_URL": "http://localhost:3000" }
     }
   }
 }
 ```
-Adjust `args` to match your own `dist/index.js` path, and `EDITOR_API_URL` if the server runs on another port.
+Use an absolute `dist/index.js` path if your MCP client does not resolve relative paths, and adjust `EDITOR_API_URL` if the editor server runs on another port.
 
 ### Step 3 — Register with your client
 
@@ -193,14 +221,17 @@ The agent will chain the tools automatically:
 ## 🗂️ Project structure
 
 ```
-├── src/app/           editor page + 8 API routes
+├── src/app/           editor page + 8 API routes (incl. SSE /events)
 ├── src/components/
-│   ├── editor/        18 editor components (Canvas, Toolbar, Panels...)
-│   └── ui/            48 shadcn/ui components
-├── src/lib/           engine logic (element-utils, auto-layout, boolean-ops,
-│                      snap-utils, storage, server-state, export)
-├── src/store/         editor-store.ts (Zustand, ~2150 lines)
-├── src/data/          demo-design.ts (initial demo design)
+│   ├── editor/        editor components + canvas/ hooks (Canvas, Toolbar, Panels,
+│   │                  prototype/ player + interactions, ExportPanel...)
+│   └── ui/            5 shadcn/ui components (in use)
+├── src/lib/           engine logic (element-utils, auto-layout, snap-utils, storage,
+│   │                  server-state, server-project, export, import/{image,svg,project},
+│   │                  prototype/{transitions,smart-animate}, events/bus)
+├── src/types/         prototype.ts (Interaction model)
+├── src/store/         editor-store.ts (Zustand, ~2600 lines)
+├── src/data/          demo-design.ts (VidVerse demo — via File menu)
 ├── mcp-server/        MCP server (52 tools) + config
 ├── prisma/            schema (optional)
 └── img/               sign.jpeg (cover image)

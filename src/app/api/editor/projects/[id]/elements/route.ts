@@ -3,6 +3,7 @@ import {
   getProject, saveProject, findElementInList, updateElementInList,
   removeElementFromList, flattenElements
 } from '@/lib/server-state'
+import { publishProjectEvent, getRequestOrigin } from '@/lib/events/bus'
 
 // GET /api/editor/projects/[projectId]/elements
 export async function GET(
@@ -78,5 +79,14 @@ export async function POST(
   }
 
   await saveProject(project)
+
+  // Live sync: tell every other connected client (browser tabs) about the new element.
+  publishProjectEvent(projectId, {
+    type: 'element-created',
+    origin: getRequestOrigin(request),
+    pageId: page.id,
+    element,
+  })
+
   return NextResponse.json({ element })
 }

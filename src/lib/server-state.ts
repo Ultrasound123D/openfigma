@@ -65,6 +65,8 @@ export interface DesignElement {
   clipContent?: boolean
   booleanOperation?: string
   booleanSourceIds?: string[]
+  booleanContours?: any[]
+  isMask?: boolean
   vectorNetwork?: any
 }
 
@@ -120,7 +122,7 @@ export async function listProjects(): Promise<{ id: string; name: string; update
   await ensureDataDir()
   try {
     const files = await fs.readdir(DATA_DIR)
-    const projects = []
+    const projects: { id: string; name: string; updatedAt: string }[] = []
     for (const file of files) {
       if (file.endsWith('.json')) {
         const data = await fs.readFile(path.join(DATA_DIR, file), 'utf-8')

@@ -265,7 +265,7 @@ function LayerItem({
 
   const rowContent = (
     <div
-      className={`flex items-center h-[22px] cursor-pointer group text-[11px] relative select-none ${
+      className={`flex items-center h-[28px] cursor-pointer group text-[11px] relative select-none ${
         isSelected
           ? 'bg-[#0D99FF]/15 text-white'
           : isHovered

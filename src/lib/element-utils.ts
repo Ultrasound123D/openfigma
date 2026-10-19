@@ -258,8 +258,16 @@ export function getVectorNetwork(el: DesignElement): VectorNetwork {
 /**
  * Build the SVG `d` path string for a path-type element, preferring VectorNetwork.
  * Falls back to PathPoint[] rendering for backward compatibility.
+ * PHASE 6: multi-contour boolean results (el.booleanContours) serialize as
+ * concatenated subpaths (M…Z M…Z) — rendered with fillRule=evenodd by callers.
  */
 export function pathElementToSvgPath(el: DesignElement): string {
+  if (el.booleanContours && el.booleanContours.length > 0) {
+    return el.booleanContours
+      .map((net) => vectorNetworkToSvgPath(net))
+      .filter(Boolean)
+      .join(' ')
+  }
   if (el.vectorNetwork) {
     return vectorNetworkToSvgPath(el.vectorNetwork)
   }
@@ -277,6 +285,11 @@ export function pathElementToSvgPath(el: DesignElement): string {
     return d
   }
   return ''
+}
+
+/** PHASE 6: true when the element renders as multi-contour evenodd (boolean result). */
+export function isEvenOddFill(el: DesignElement): boolean {
+  return !!(el.booleanContours && el.booleanContours.length > 0)
 }
 
 /**

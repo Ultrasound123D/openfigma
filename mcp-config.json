@@ -2,7 +2,7 @@
   "mcpServers": {
     "figma-editor": {
       "command": "node",
-      "args": ["C:\\Users\\HP\\Desktop\\figma_project (1)\\mcp-server\\dist\\index.js"],
+      "args": ["mcp-server/dist/index.js"],
       "env": {
         "EDITOR_API_URL": "http://localhost:3000"
       }

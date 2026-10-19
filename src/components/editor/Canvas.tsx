@@ -1,49 +1,24 @@
 'use client'
 
-import React, { useCallback, useRef, useEffect, useState, useMemo } from 'react'
-import { useEditorStore, DesignElement, generateId } from '@/store/editor-store'
-import { calculateSnapLines, SnapLine, constrainToAngle } from '@/lib/snap-utils'
+import React, { useMemo } from 'react'
+import { useEditorStore } from '@/store/editor-store'
+import type { DesignElement } from '@/store/editor-store'
+import { findElementInList, getVectorNetwork, getAllElements, pathElementToSvgPath, isEvenOddFill } from '@/lib/element-utils'
 import { calculateAutoLayout, hasAutoLayout } from '@/lib/auto-layout'
-import { loadImageAsBase64, createImageElement, isImageFile } from '@/lib/image-utils'
-import { findElementInList, getAllElements, pathElementToSvgPath, getVectorNetwork, vectorNetworkToPathPoints, pathPointsToVectorNetwork, translateNetwork, simplifyPath, smoothPointsToPathPoints, updateVertexInNetwork, setTangentInNetwork } from '@/lib/element-utils'
 import { Rulers } from './Rulers'
 import { CanvasContextMenu } from './CanvasContextMenu'
 import { InlineTextEditor } from './InlineTextEditor'
-
-type HandlePosition = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'rotate'
-
-const HANDLE_SIZE = 8
-const ROTATION_HANDLE_DISTANCE = 30
-
-function getHandlePositions(el: DesignElement, zoom: number): Record<HandlePosition, { x: number; y: number }> {
-  const safeZoom = isFinite(zoom) && zoom > 0.001 ? zoom : 1
-  return {
-    nw: { x: el.x, y: el.y },
-    n: { x: el.x + el.width / 2, y: el.y },
-    ne: { x: el.x + el.width, y: el.y },
-    e: { x: el.x + el.width, y: el.y + el.height / 2 },
-    se: { x: el.x + el.width, y: el.y + el.height },
-    s: { x: el.x + el.width / 2, y: el.y + el.height },
-    sw: { x: el.x, y: el.y + el.height },
-    w: { x: el.x, y: el.y + el.height / 2 },
-    rotate: { x: el.x + el.width / 2, y: el.y - ROTATION_HANDLE_DISTANCE / safeZoom },
-  }
-}
-
-const handleCursors: Record<HandlePosition, string> = {
-  nw: 'nw-resize', n: 'n-resize', ne: 'ne-resize', e: 'e-resize',
-  se: 'se-resize', s: 's-resize', sw: 'sw-resize', w: 'w-resize', rotate: 'grab',
-}
-
-// Frustum culling: check if element is visible in viewport
-function isElementInViewport(el: DesignElement, viewportBounds: { minX: number; minY: number; maxX: number; maxY: number }): boolean {
-  return (
-    el.x + el.width >= viewportBounds.minX &&
-    el.x <= viewportBounds.maxX &&
-    el.y + el.height >= viewportBounds.minY &&
-    el.y <= viewportBounds.maxY
-  )
-}
+import { getHandlePositions, handleCursors, isElementInViewport, type HandlePosition } from './canvas/canvas-helpers'
+import { useCanvasViewport } from './canvas/use-canvas-viewport'
+import { useCanvasHitTest } from './canvas/use-canvas-hittest'
+import { usePenTool } from './canvas/use-pen-tool'
+import { usePathEditing } from './canvas/use-path-editing'
+import { useElementInteractions } from './canvas/use-element-interactions'
+import { useCanvasKeyboard } from './canvas/use-canvas-keyboard'
+// PHASE 8 — per-frame layout grids renderer
+import { FrameGrids } from './canvas/FrameGrids'
+// PHASE 10 — real text measurement + case transform
+import { measureText, measureLine, applyTextCase } from '@/lib/text-measure'
 
 // Generate SVG defs for gradients, filters, clip paths, and image patterns
 function generateSVGDefs(elements: DesignElement[], zoom: number): React.ReactNode {
@@ -84,11 +59,26 @@ function generateSVGDefs(elements: DesignElement[], zoom: number): React.ReactNo
         )
       } else if (fill.type === 'image' && fill.imageUrl) {
         const id = `img-${el.id}-${gradientIndex++}`
-        defs.push(
-          <pattern key={id} id={id} patternUnits="objectBoundingBox" width="100%" height="100%">
-            <image href={fill.imageUrl} width="100%" height="100%" preserveAspectRatio="xMidYMid slice" />
-          </pattern>
-        )
+        // PHASE 10 — image fill modes: fill (cover), fit (contain), crop (manual)
+        const mode = fill.scaleMode || 'fill'
+        if (mode === 'crop') {
+          // userSpaceOnUse pattern sized to the element; image placed with
+          // manual scale/offset, clipped by the pattern tile
+          const s = fill.scale && fill.scale > 0 ? fill.scale : 1
+          const ox = fill.offsetX || 0
+          const oy = fill.offsetY || 0
+          defs.push(
+            <pattern key={id} id={id} patternUnits="userSpaceOnUse" width={Math.max(1, el.width)} height={Math.max(1, el.height)} x={0} y={0}>
+              <image href={fill.imageUrl} x={ox} y={oy} width={el.width * s} height={el.height * s} preserveAspectRatio="none" />
+            </pattern>
+          )
+        } else {
+          defs.push(
+            <pattern key={id} id={id} patternUnits="objectBoundingBox" width="100%" height="100%">
+              <image href={fill.imageUrl} width="100%" height="100%" preserveAspectRatio={mode === 'fit' ? 'xMidYMid meet' : 'xMidYMid slice'} />
+            </pattern>
+          )
+        }
       }
     }
 
@@ -318,11 +308,30 @@ const CanvasElement = React.memo(function CanvasElement({
         const letterSpacing = el.letterSpacing || 0
         const fontStyle = el.fontStyle || 'normal'
         const textDecoration = el.textDecoration || 'none'
-        const lines = (el.textContent || 'Text').split('\n')
+        // PHASE 10: real measurement drives line layout (wrap for grow, shrink for hug)
+        const autoResize = el.textAutoResize || 'fixed'
+        const measured = measureText(
+          {
+            text: el.textContent || 'Text',
+            fontFamily: el.fontFamily || 'Inter',
+            fontSize, fontWeight, lineHeight, letterSpacing, fontStyle,
+          },
+          autoResize,
+          el.width
+        )
+        const lines = measured.lines.map((l) => applyTextCase(l, el.textCase))
         const lineHeightPx = fontSize * lineHeight
         const totalTextHeight = lines.length * lineHeightPx
         const startY = (el.height - totalTextHeight) / 2 + fontSize
         const clipId = `text-clip-${el.id}`
+        const measureParams = {
+          text: el.textContent || 'Text',
+          fontFamily: el.fontFamily || 'Inter',
+          fontSize, fontWeight, lineHeight, letterSpacing, fontStyle,
+        }
+        const anchorX = (i: number) =>
+          textAlign === 'center' ? el.width / 2 : textAlign === 'right' ? el.width : 0
+        void anchorX
         return (
           <g style={style}>
             {el.clipContent && (
@@ -334,25 +343,36 @@ const CanvasElement = React.memo(function CanvasElement({
             )}
             <rect x={0} y={0} width={el.width} height={el.height} fill="transparent" stroke="none" />
             <g clipPath={el.clipContent ? `url(#${clipId})` : undefined}>
-              {lines.map((line, i) => (
-                <text
-                  key={i}
-                  x={textAlign === 'center' ? el.width / 2 : textAlign === 'right' ? el.width : 0}
-                  y={startY + i * lineHeightPx}
-                  fontSize={fontSize}
-                  fontWeight={fontWeight}
-                  fontFamily={fontFamily}
-                  fontStyle={fontStyle}
-                  letterSpacing={letterSpacing}
-                  fill={textColor}
-                  textAnchor={textAlign === 'center' ? 'middle' : textAlign === 'right' ? 'end' : 'start'}
-                  textDecoration={textDecoration}
-                  opacity={el.opacity / 100}
-                  style={{ pointerEvents: 'none', userSelect: 'none' }}
-                >
-                  {line}
-                </text>
-              ))}
+              {lines.map((line, i) => {
+                const x = textAlign === 'center' ? el.width / 2 : textAlign === 'right' ? el.width : 0
+                return (
+                  <g key={i}>
+                    <text
+                      x={x}
+                      y={startY + i * lineHeightPx}
+                      fontSize={fontSize}
+                      fontWeight={fontWeight}
+                      fontFamily={fontFamily}
+                      fontStyle={fontStyle}
+                      letterSpacing={letterSpacing}
+                      fill={textColor}
+                      textAnchor={textAlign === 'center' ? 'middle' : textAlign === 'right' ? 'end' : 'start'}
+                      textDecoration={textDecoration === 'underline' ? 'underline' : undefined}
+                      opacity={el.opacity / 100}
+                      style={{ pointerEvents: 'none', userSelect: 'none' }}
+                    >
+                      {line}
+                    </text>
+                    {/* PHASE 10: manual strikethrough (SVG line-through support is inconsistent) */}
+                    {textDecoration === 'strikethrough' && line.length > 0 && (() => {
+                      const w = measureLine(measured.lines[i], measureParams)
+                      const sx = textAlign === 'center' ? (el.width - w) / 2 : textAlign === 'right' ? el.width - w : 0
+                      const sy = startY + i * lineHeightPx - fontSize * 0.28
+                      return <line x1={sx} y1={sy} x2={sx + w} y2={sy} stroke={textColor} strokeWidth={Math.max(1, fontSize * 0.06)} />
+                    })()}
+                  </g>
+                )
+              })}
             </g>
           </g>
         )
@@ -412,6 +432,7 @@ const CanvasElement = React.memo(function CanvasElement({
           <path
             d={d}
             fill={fillAttr}
+            fillRule={isEvenOddFill(el) ? 'evenodd' : undefined}
             stroke={strokeAttr}
             strokeWidth={el.strokeWidth || 2}
             strokeLinecap="round"
@@ -498,33 +519,104 @@ const CanvasElement = React.memo(function CanvasElement({
         />
       )}
       
-      {/* Render children on top of the frame's own shape */}
-      {effectiveChildren && (
-        <g clipPath={element.clipContent ? `url(#clip-${element.id})` : undefined}>
-          {effectiveChildren.map((child) => {
-            if (!child.visible) return null
-            return (
-              <g
-                key={child.id}
-                transform={`translate(${child.x}, ${child.y})${child.rotation ? ` rotate(${child.rotation}, ${child.width / 2}, ${child.height / 2})` : ''}`}
-              >
-                {renderShape(child, true)}
-                {selectedIds.includes(child.id) && (
-                  <rect
-                    x={-1} y={-1}
-                    width={child.width + 2} height={child.height + 2}
-                    fill="none"
-                    stroke="#0D99FF"
-                    strokeWidth={1.5 / safeZoom}
-                    strokeDasharray={`${6 / safeZoom} ${3 / safeZoom}`}
-                    pointerEvents="none"
-                  />
-                )}
-              </g>
-            )
-          })}
-        </g>
-      )}
+      {/* Render children on top of the frame's own shape.
+          PHASE 6 mask semantics: a child with isMask clips all PREVIOUS
+          siblings (+ the mask itself) within this parent. */}
+      {effectiveChildren && (() => {
+        const renderChild = (child: DesignElement) => (
+          <g
+            key={child.id}
+            transform={`translate(${child.x}, ${child.y})${child.rotation ? ` rotate(${child.rotation}, ${child.width / 2}, ${child.height / 2})` : ''}`}
+          >
+            {renderShape(child, true)}
+            {selectedIds.includes(child.id) && (
+              <rect
+                x={-1} y={-1}
+                width={child.width + 2} height={child.height + 2}
+                fill="none"
+                stroke="#0D99FF"
+                strokeWidth={1.5 / safeZoom}
+                strokeDasharray={`${6 / safeZoom} ${3 / safeZoom}`}
+                pointerEvents="none"
+              />
+            )}
+          </g>
+        )
+        const maskClipShape = (mask: DesignElement) => {
+          switch (mask.type) {
+            case 'rectangle':
+              return <rect x={0} y={0} width={mask.width} height={mask.height} rx={mask.cornerRadius || 0} ry={mask.cornerRadius || 0} />
+            case 'ellipse':
+              return <ellipse cx={mask.width / 2} cy={mask.height / 2} rx={mask.width / 2} ry={mask.height / 2} />
+            case 'polygon': {
+              const sides = mask.sides || 6
+              const r = Math.min(mask.width, mask.height) / 2
+              const pts: string[] = []
+              for (let i = 0; i < sides; i++) {
+                const a = (i * 2 * Math.PI) / sides - Math.PI / 2
+                pts.push(`${(mask.width / 2) + r * Math.cos(a)},${(mask.height / 2) + r * Math.sin(a)}`)
+              }
+              return <polygon points={pts.join(' ')} />
+            }
+            case 'star': {
+              const sides = mask.sides || 5
+              const outerR = Math.min(mask.width, mask.height) / 2
+              const innerR = outerR * ((mask.innerRadius || 40) / 100)
+              const pts: string[] = []
+              for (let i = 0; i < sides * 2; i++) {
+                const a = (i * Math.PI) / sides - Math.PI / 2
+                const r = i % 2 === 0 ? outerR : innerR
+                pts.push(`${(mask.width / 2) + r * Math.cos(a)},${(mask.height / 2) + r * Math.sin(a)}`)
+              }
+              return <polygon points={pts.join(' ')} />
+            }
+            case 'path': {
+              const d = pathElementToSvgPath(mask)
+              return d ? <path d={d} fillRule={isEvenOddFill(mask) ? 'evenodd' : undefined} /> : null
+            }
+            default:
+              return null
+          }
+        }
+        const groups: React.ReactNode[] = []
+        let buffer: React.ReactNode[] = []
+        for (const child of effectiveChildren) {
+          if (!child.visible) continue
+          if (child.isMask) {
+            const clipId = `mask-${element.id}-${child.id}`
+            const clipShape = maskClipShape(child)
+            if (clipShape) {
+              groups.push(
+                <g key={clipId}>
+                  <defs>
+                    <clipPath id={clipId}>
+                      <g transform={`translate(${child.x}, ${child.y})${child.rotation ? ` rotate(${child.rotation}, ${child.width / 2}, ${child.height / 2})` : ''}`}>
+                        {clipShape}
+                      </g>
+                    </clipPath>
+                  </defs>
+                  <g clipPath={`url(#${clipId})`}>
+                    {buffer}
+                    {renderChild(child)}
+                  </g>
+                </g>
+              )
+              buffer = []
+            } else {
+              // unsupported mask geometry — render unclipped
+              buffer.push(renderChild(child))
+            }
+          } else {
+            buffer.push(renderChild(child))
+          }
+        }
+        groups.push(...buffer)
+        return (
+          <g clipPath={element.clipContent ? `url(#clip-${element.id})` : undefined}>
+            {groups}
+          </g>
+        )
+      })()}
       
       {/* For non-frame/group elements without children, shape already rendered above */}
 
@@ -610,1779 +702,61 @@ const CanvasElement = React.memo(function CanvasElement({
 })
 
 export function Canvas() {
+  // Store state needed for rendering
+  const elements = useEditorStore((s) => s.elements)
+  const selectedElementIds = useEditorStore((s) => s.selectedElementIds)
+  const activeTool = useEditorStore((s) => s.activeTool)
+  const zoom = useEditorStore((s) => s.zoom)
+  const panX = useEditorStore((s) => s.panX)
+  const panY = useEditorStore((s) => s.panY)
+  const showGrid = useEditorStore((s) => s.showGrid)
+  const gridSize = useEditorStore((s) => s.gridSize)
+  // PHASE 8 — view options
+  const showPixelGrid = useEditorStore((s) => s.showPixelGrid)
+  const guides = useEditorStore((s) => s.guides)
+  const currentFrameId = useEditorStore((s) => s.currentFrameId)
+  const exitFrame = useEditorStore((s) => s.exitFrame)
+
+  // --- P4 refactor: the component now composes focused hooks ---------------
+  // viewport: pan / zoom / fit / wheel / space-panning / container size
+  const viewport = useCanvasViewport()
+  const { containerRef, containerSize, screenToCanvas, handleWheel } = viewport
+
+  // hitTest: geometry lookups (element / frame / resize-handle under cursor)
+  const hitTest = useCanvasHitTest()
+  const { getAbsolutePosition } = hitTest
+
+  // pen: bezier pen + freehand pencil state machines
+  const pen = usePenTool({ findParentFrameAtPosition: hitTest.findParentFrameAtPosition })
+  const { penPoints, penCursorPos, isPencilDrawing, pencilPoints } = pen
+
+  // pathEditing: double-click anchor/tangent editing of existing paths
+  const pathEditing = usePathEditing({ getAbsolutePosition })
+  const { editingPathId, editingPointIndex, handlePathAnchorClick, handlePathTangentClick } = pathEditing
+
+  // interactions: drag / resize / rubber-band / draw preview / eyedropper
+  const interactions = useElementInteractions({ viewport, hitTest, pen, pathEditing })
   const {
-    elements,
-    zoom,
-    setZoom,
-    panX,
-    panY,
-    setPan,
-    setSelectedElementIds,
-    selectedElementIds,
-    activeTool,
-    addElement,
-    updateElement,
-    pushHistory,
-    setActiveTool,
-    showGrid,
-    snapToGrid,
-    snapToElements,
-    gridSize,
-    showRulers,
-    guides,
-    removeGuide,
-    currentFrameId,
-    enterFrame,
-    exitFrame,
-    moveElementToFrame,
-  } = useEditorStore()
+    isDrawing, drawStart, drawCurrent, rubberBand, snapLines, hoveredElementId,
+    dropTargetFrameId, eyedropperPos, eyedropperColor, editingTextId, setEditingTextId,
+    hiddenCanvasRef, isScaling, hoverDistances,
+    handleElementMouseDown, handleElementDoubleClick, handleMouseDown, handleMouseMove,
+    handleMouseUp, handleDoubleClick, handleDrop, handleDragOver, getCursor,
+  } = interactions
+
+  // keyboard: global shortcut layer (undo, tools, zoom, clipboard, ...)
+  useCanvasKeyboard({
+    fitToScreen: viewport.fitToScreen,
+    zoomToSelection: viewport.zoomToSelection,
+    pen,
+    pathEditing,
+    editingTextId,
+    setEditingTextId,
+    setSpaceHeld: viewport.setSpaceHeld,
+    setAltHeld: interactions.setAltHeld,
+    resetDrawingState: interactions.resetDrawingState,
+  })
 
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [isPanning, setIsPanning] = useState(false)
-  const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
-  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
-  const [spaceHeld, setSpaceHeld] = useState(false)
-  const hasAutoFitted = useRef(false)
-
-  const [isDrawing, setIsDrawing] = useState(false)
-  const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null)
-  const [drawCurrent, setDrawCurrent] = useState<{ x: number; y: number } | null>(null)
-
-  const [isDragging, setIsDragging] = useState(false)
-  const dragStartRef = useRef<{ x: number; y: number } | null>(null)
-  const dragElementStartsRef = useRef<Record<string, { x: number; y: number }>>({})
-  const [altHeld, setAltHeld] = useState(false)
-  const [dragDuplicates, setDragDuplicates] = useState<DesignElement[] | null>(null)
-
-  const [isResizing, setIsResizing] = useState(false)
-  const [activeResizeHandle, setActiveResizeHandle] = useState<HandlePosition | null>(null)
-  const resizeStartRef = useRef<{ x: number; y: number; elX: number; elY: number; elW: number; elH: number; fontSize?: number } | null>(null)
-  const resizeElementIdRef = useRef<string | null>(null)
-
-  const [rubberBand, setRubberBand] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null)
-  const rubberBandStartRef = useRef<{ x: number; y: number } | null>(null)
-
-  const [penPoints, setPenPoints] = useState<{ x: number; y: number; cx1?: number; cy1?: number; cx2?: number; cy2?: number }[]>([])
-  const penPointsRef = useRef(penPoints)
-  useEffect(() => { penPointsRef.current = penPoints }, [penPoints])
-
-  // Native app feel: prevent drag-to-text, browser zoom
-  useEffect(() => {
-    const preventDefaults = (e: Event) => e.preventDefault()
-    const container = containerRef.current
-    if (container) {
-      container.addEventListener('dragstart', preventDefaults)
-      // Prevent browser zoom with Ctrl+scroll (React onWheel is passive)
-      container.addEventListener('wheel', preventDefaults, { passive: false })
-    }
-    return () => {
-      if (container) {
-        container.removeEventListener('dragstart', preventDefaults)
-        container.removeEventListener('wheel', preventDefaults)
-      }
-    }
-  }, [])
-  const penElementIdRef = useRef<string | null>(null)
-  const [penDragStart, setPenDragStart] = useState<{ x: number; y: number; pointIndex: number } | null>(null)
-  const [penCursorPos, setPenCursorPos] = useState<{ x: number; y: number } | null>(null)
-
-  // Path editing state (double-click to enter edit mode on existing path)
-  const [editingPathId, setEditingPathId] = useState<string | null>(null)
-  const [editingPointIndex, setEditingPointIndex] = useState<number | null>(null)
-  const [editingDragType, setEditingDragType] = useState<'anchor' | 'tangentStart' | 'tangentEnd' | null>(null)
-  const [editingDragSegIdx, setEditingDragSegIdx] = useState<number | null>(null)
-  const editingDragStartRef = useRef<{ x: number; y: number; origX: number; origY: number } | null>(null)
-
-  // Pencil drawing state
-  const [isPencilDrawing, setIsPencilDrawing] = useState(false)
-  const [pencilPoints, setPencilPoints] = useState<{ x: number; y: number }[]>([])
-  const pencilRafRef = useRef<number>(0)
-
-  // Eyedropper state
-  const [eyedropperColor, setEyedropperColor] = useState<string | null>(null)
-  const [eyedropperPos, setEyedropperPos] = useState<{ x: number; y: number } | null>(null)
-  const hiddenCanvasRef = useRef<HTMLCanvasElement | null>(null)
-
-  const [editingTextId, setEditingTextId] = useState<string | null>(null)
-  const [snapLines, setSnapLines] = useState<SnapLine[]>([])
-  const [hoveredElementId, setHoveredElementId] = useState<string | null>(null)
-  const elementCounterRef = useRef(0)
-
-  // Frame drop highlight
-  const [dropTargetFrameId, setDropTargetFrameId] = useState<string | null>(null)
-
-  // RAF throttle for smooth drag/resize
-  const dragRafRef = useRef<number>(0)
-  const pendingDragUpdate = useRef<{ id: string; updates: Partial<DesignElement> }[] | null>(null)
-
-  const calculateFitToScreen = useCallback((size: { width: number; height: number }) => {
-    const state = useEditorStore.getState()
-    const allElements = state.elements
-    if (allElements.length === 0 || size.width < 200 || size.height < 200) return
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-    const processElement = (el: DesignElement, parentX = 0, parentY = 0) => {
-      const absX = el.x + parentX
-      const absY = el.y + parentY
-      minX = Math.min(minX, absX)
-      minY = Math.min(minY, absY)
-      maxX = Math.max(maxX, absX + el.width)
-      maxY = Math.max(maxY, absY + el.height)
-      if (el.children) el.children.forEach(c => processElement(c, absX, absY))
-    }
-    allElements.forEach((el) => processElement(el))
-    const contentWidth = maxX - minX
-    const contentHeight = maxY - minY
-    const contentCenterX = (minX + maxX) / 2
-    const contentCenterY = (minY + maxY) / 2
-    const padding = 100
-    const scaleX = (size.width - padding * 2) / contentWidth
-    const scaleY = (size.height - padding * 2) / contentHeight
-    const newZoom = Math.min(scaleX, scaleY, 2)
-    state.setZoom(newZoom)
-    state.setPan(-contentCenterX * newZoom, -contentCenterY * newZoom)
-  }, [])
-
-  useEffect(() => {
-    if (!containerRef.current) return
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const size = { width: entry.contentRect.width, height: entry.contentRect.height }
-        setContainerSize(size)
-        if (!hasAutoFitted.current && size.width > 400 && size.height > 300) {
-          hasAutoFitted.current = true
-          setTimeout(() => calculateFitToScreen(size), 200)
-        }
-      }
-    })
-    observer.observe(containerRef.current)
-    return () => observer.disconnect()
-  }, [calculateFitToScreen])
-
-  const fitToScreen = useCallback(() => {
-    if (containerSize.width === 0) return
-    calculateFitToScreen(containerSize)
-  }, [containerSize, calculateFitToScreen])
-
-  const zoomToSelection = useCallback(() => {
-    const state = useEditorStore.getState()
-    const selected = state.selectedElementIds
-      .map(id => findElementInList(state.elements, id))
-      .filter(Boolean) as DesignElement[]
-    if (selected.length === 0) return
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-    selected.forEach(el => {
-      minX = Math.min(minX, el.x)
-      minY = Math.min(minY, el.y)
-      maxX = Math.max(maxX, el.x + el.width)
-      maxY = Math.max(maxY, el.y + el.height)
-    })
-    const cw = maxX - minX
-    const ch = maxY - minY
-    const pad = 100
-    const nz = Math.min((containerSize.width - pad * 2) / cw, (containerSize.height - pad * 2) / ch, 4)
-    state.setZoom(nz)
-    state.setPan(-(minX + cw / 2) * nz, -(minY + ch / 2) * nz)
-  }, [containerSize])
-
-  const screenToCanvas = useCallback(
-    (clientX: number, clientY: number) => {
-      const rect = containerRef.current?.getBoundingClientRect()
-      if (!rect) return { x: 0, y: 0 }
-      const safeZoom = isFinite(zoom) && zoom > 0.001 ? zoom : 1
-      const cx = (containerSize.width || 0) / 2 + panX
-      const cy = (containerSize.height || 0) / 2 + panY
-      const x = (clientX - rect.left - cx) / safeZoom
-      const y = (clientY - rect.top - cy) / safeZoom
-      return { x: isFinite(x) ? x : 0, y: isFinite(y) ? y : 0 }
-    },
-    [zoom, panX, panY, containerSize]
-  )
-
-  // Find the deepest frame/group that contains the given canvas position
-  const findParentFrameAtPosition = useCallback(
-    (canvasX: number, canvasY: number, excludeIds: string[] = []): DesignElement | null => {
-      const state = useEditorStore.getState()
-      // Search recursively - find the deepest nested frame/group
-      let bestMatch: DesignElement | null = null
-      let bestDepth = -1
-
-      const searchElements = (elements: DesignElement[], parentX: number, parentY: number, depth: number) => {
-        for (let i = elements.length - 1; i >= 0; i--) {
-          const el = elements[i]
-          if (!el.visible || el.locked) continue
-          if (excludeIds.includes(el.id)) continue
-          if (el.type !== 'frame' && el.type !== 'group') continue
-
-          const absX = el.x + parentX
-          const absY = el.y + parentY
-
-          if (canvasX >= absX && canvasX <= absX + el.width &&
-              canvasY >= absY && canvasY <= absY + el.height) {
-            // Found a match - check if there's a deeper nested match
-            if (depth > bestDepth) {
-              bestDepth = depth
-              bestMatch = el
-            }
-            // Search children for deeper frames
-            if (el.children) {
-              searchElements(el.children, absX, absY, depth + 1)
-            }
-          }
-        }
-      }
-
-      searchElements(state.elements, 0, 0, 0)
-      return bestMatch
-    },
-    []
-  )
-
-  const findElementAtPosition = useCallback(
-    (canvasX: number, canvasY: number): DesignElement | null => {
-      const state = useEditorStore.getState()
-      for (let i = state.elements.length - 1; i >= 0; i--) {
-        const el = state.elements[i]
-        if (!el.visible || el.locked) continue
-        if (el.children) {
-          for (let j = el.children.length - 1; j >= 0; j--) {
-            const child = el.children[j]
-            if (!child.visible || child.locked) continue
-            // Convert child's relative coordinates to absolute canvas coordinates
-            const absChildX = el.x + child.x
-            const absChildY = el.y + child.y
-            if (canvasX >= absChildX && canvasX <= absChildX + child.width &&
-                canvasY >= absChildY && canvasY <= absChildY + child.height) {
-              return child
-            }
-          }
-        }
-        if (canvasX >= el.x && canvasX <= el.x + el.width &&
-            canvasY >= el.y && canvasY <= el.y + el.height) {
-          return el
-        }
-      }
-      return null
-    },
-    []
-  )
-
-  // Helper: get absolute position of an element (accounts for parent frame offsets)
-  const getAbsolutePosition = useCallback(
-    (elementId: string): { x: number; y: number } | null => {
-      const state = useEditorStore.getState()
-      // Check if element is a child of any frame/group
-      for (const parent of state.elements) {
-        if (parent.children) {
-          const child = parent.children.find(c => c.id === elementId)
-          if (child) {
-            return { x: parent.x + child.x, y: parent.y + child.y }
-          }
-        }
-      }
-      // Top-level element
-      const el = state.elements.find(e => e.id === elementId)
-      if (el) return { x: el.x, y: el.y }
-      return null
-    },
-    []
-  )
-
-  // Create or update the pen element in real-time (appears in layers immediately)
-  const syncPenElement = useCallback((points: { x: number; y: number; cx1?: number; cy1?: number; cx2?: number; cy2?: number }[], closed: boolean) => {
-    const state = useEditorStore.getState()
-    if (points.length < 1) return
-    let pMinX = Infinity, pMinY = Infinity, pMaxX = -Infinity, pMaxY = -Infinity
-    points.forEach(pt => {
-      pMinX = Math.min(pMinX, pt.x, pt.cx1 ?? pt.x, pt.cx2 ?? pt.x)
-      pMinY = Math.min(pMinY, pt.y, pt.cy1 ?? pt.y, pt.cy2 ?? pt.y)
-      pMaxX = Math.max(pMaxX, pt.x, pt.cx1 ?? pt.x, pt.cx2 ?? pt.x)
-      pMaxY = Math.max(pMaxY, pt.y, pt.cy1 ?? pt.y, pt.cy2 ?? pt.y)
-    })
-    const relPoints = points.map(pt => ({
-      x: pt.x - pMinX, y: pt.y - pMinY,
-      cx1: pt.cx1 !== undefined ? pt.cx1 - pMinX : undefined,
-      cy1: pt.cy1 !== undefined ? pt.cy1 - pMinY : undefined,
-      cx2: pt.cx2 !== undefined ? pt.cx2 - pMinX : undefined,
-      cy2: pt.cy2 !== undefined ? pt.cy2 - pMinY : undefined,
-    }))
-    const vectorNetwork = translateNetwork(
-      pathPointsToVectorNetwork(relPoints, closed),
-      0, 0
-    )
-    const x = Math.round(pMinX), y = Math.round(pMinY)
-    const w = Math.round(pMaxX - pMinX) || 1, h = Math.round(pMaxY - pMinY) || 1
-    if (penElementIdRef.current) {
-      state.updateElement(penElementIdRef.current, {
-        x, y, width: w, height: h,
-        pathPoints: relPoints, pathClosed: closed, vectorNetwork,
-      })
-    } else {
-      const newEl: DesignElement = {
-        id: generateId('path'), name: 'Path', type: 'path',
-        x, y, width: w, height: h,
-        fill: 'transparent', stroke: '#000000', strokeWidth: 2, strokeStyle: 'solid', strokeAlign: 'center',
-        cornerRadius: 0, cornerRadiusTL: 0, cornerRadiusTR: 0, cornerRadiusBL: 0, cornerRadiusBR: 0,
-        opacity: 100, rotation: 0, visible: true, locked: false,
-        blendMode: 'normal', flipH: false, flipV: false, clipContent: false,
-        pathPoints: relPoints, pathClosed: closed, vectorNetwork,
-      }
-      state.addElement(newEl)
-      penElementIdRef.current = newEl.id
-    }
-  }, [])
-
-  // Finish pen path — the element is already in the store (created on first click)
-  const finishPenPath = useCallback(() => {
-    const state = useEditorStore.getState()
-    if (penPoints.length < 2) {
-      // Remove the element if only 1 point (not enough for a path)
-      if (penElementIdRef.current) {
-        state.deleteElement(penElementIdRef.current)
-        penElementIdRef.current = null
-      }
-      setPenPoints([])
-      setPenDragStart(null)
-      setPenCursorPos(null)
-      return
-    }
-    // Finalize: element already exists, just select it
-    if (penElementIdRef.current) {
-      const parentFrame = findParentFrameAtPosition(penPoints[0].x, penPoints[0].y, [penElementIdRef.current])
-      if (parentFrame && parentFrame.id !== currentFrameId) {
-        state.moveElementToFrame(penElementIdRef.current, parentFrame.id)
-      }
-      state.setSelectedElementIds([penElementIdRef.current])
-      state.pushHistory()
-    }
-    penElementIdRef.current = null
-    setPenPoints([])
-    setPenDragStart(null)
-    setPenCursorPos(null)
-  }, [penPoints, currentFrameId, findParentFrameAtPosition])
-
-  // Auto-sync pen element in store whenever penPoints changes (live update in layers)
-  useEffect(() => {
-    if (activeTool !== 'pen' || penPoints.length === 0 || !penElementIdRef.current) return
-    syncPenElement(penPoints, false)
-  }, [penPoints, activeTool, syncPenElement])
-
-  // Finalize pen path when switching away from pen tool
-  const prevToolRef = useRef(activeTool)
-  useEffect(() => {
-    if (prevToolRef.current === 'pen' && activeTool !== 'pen') {
-      if (penPoints.length >= 2) {
-        finishPenPath()
-      } else {
-        // Remove incomplete element from store
-        if (penElementIdRef.current) {
-          useEditorStore.getState().deleteElement(penElementIdRef.current)
-          penElementIdRef.current = null
-        }
-        setPenPoints([])
-        setPenDragStart(null)
-        setPenCursorPos(null)
-      }
-    }
-    prevToolRef.current = activeTool
-  }, [activeTool]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const findResizeHandle = useCallback(
-    (canvasX: number, canvasY: number): { elementId: string; handle: HandlePosition } | null => {
-      const state = useEditorStore.getState()
-      if (state.selectedElementIds.length !== 1) return null
-      const id = state.selectedElementIds[0]
-      const el = findElementInList(state.elements, id)
-      if (!el) return null
-      // Use absolute position for child elements
-      let absEl = el
-      for (const parent of state.elements) {
-        if (parent.children) {
-          const child = parent.children.find(c => c.id === id)
-          if (child) {
-            absEl = { ...child, x: parent.x + child.x, y: parent.y + child.y }
-            break
-          }
-        }
-      }
-      const safeZoomForHandles = isFinite(zoom) && zoom > 0.001 ? zoom : 1
-      const handles = getHandlePositions(absEl, safeZoomForHandles)
-      const threshold = HANDLE_SIZE / safeZoomForHandles
-      const rotHandle = handles.rotate
-      if (Math.abs(canvasX - rotHandle.x) < threshold && Math.abs(canvasY - rotHandle.y) < threshold) {
-        return { elementId: id, handle: 'rotate' }
-      }
-      for (const [pos, point] of Object.entries(handles)) {
-        if (pos === 'rotate') continue
-        if (Math.abs(canvasX - point.x) < threshold && Math.abs(canvasY - point.y) < threshold) {
-          return { elementId: id, handle: pos as HandlePosition }
-        }
-      }
-      return null
-    },
-    [zoom]
-  )
-
-  const handleWheel = useCallback(
-    (e: React.WheelEvent) => {
-      e.preventDefault()
-      const rect = containerRef.current?.getBoundingClientRect()
-
-      if (e.ctrlKey || e.metaKey) {
-        // Ctrl/Cmd + scroll = zoom centered on cursor (Figma default)
-        const delta = -e.deltaY * 0.005
-        const newZoom = Math.min(64, Math.max(0.01, zoom + delta * zoom))
-        if (rect) {
-          const mouseX = e.clientX - rect.left - containerSize.width / 2
-          const mouseY = e.clientY - rect.top - containerSize.height / 2
-          const scale = newZoom / zoom
-          const newPanX = mouseX - scale * (mouseX - panX)
-          const newPanY = mouseY - scale * (mouseY - panY)
-          setZoom(newZoom)
-          setPan(newPanX, newPanY)
-        }
-      } else if (e.shiftKey) {
-        // Shift + scroll = pan horizontally
-        setPan(panX - e.deltaY, panY - e.deltaX)
-      } else if (e.altKey) {
-        // Alt + scroll = zoom (alternative)
-        const delta = -e.deltaY * 0.003
-        const newZoom = Math.min(64, Math.max(0.01, zoom + delta * zoom))
-        if (rect) {
-          const mouseX = e.clientX - rect.left - containerSize.width / 2
-          const mouseY = e.clientY - rect.top - containerSize.height / 2
-          const scale = newZoom / zoom
-          const newPanX = mouseX - scale * (mouseX - panX)
-          const newPanY = mouseY - scale * (mouseY - panY)
-          setZoom(newZoom)
-          setPan(newPanX, newPanY)
-        }
-      } else {
-        // Plain scroll = pan vertically
-        setPan(panX - e.deltaX, panY - e.deltaY)
-      }
-    },
-    [zoom, panX, panY, setZoom, setPan, containerSize]
-  )
-
-  const handleElementMouseDown = useCallback(
-    (element: DesignElement, e: React.MouseEvent) => {
-      // For right-clicks, just select and let context menu handle
-      if (e.button === 2) {
-        const state = useEditorStore.getState()
-        if (!state.selectedElementIds.includes(element.id)) {
-          setSelectedElementIds([element.id])
-        }
-        return
-      }
-
-      // When pen, pencil, eyedropper, or drawing tools are active, don't intercept clicks
-      // Let the canvas handleMouseDown process these tools
-      const state = useEditorStore.getState()
-      if (['pen', 'pencil', 'eyedropper', 'rectangle', 'ellipse', 'line', 'frame', 'polygon', 'star', 'arrow', 'text', 'image', 'comment', 'slice'].includes(state.activeTool)) {
-        // Don't stop propagation - let canvas handler process the tool
-        return
-      }
-
-      e.stopPropagation()
-      if (element.locked) return
-      const currentState = useEditorStore.getState()
-      const canvasPos = screenToCanvas(e.clientX, e.clientY)
-      const handleInfo = findResizeHandle(canvasPos.x, canvasPos.y)
-
-      if (handleInfo && currentState.selectedElementIds.includes(element.id)) {
-        setIsResizing(true)
-        setActiveResizeHandle(handleInfo.handle)
-        resizeElementIdRef.current = handleInfo.elementId
-        const el = findElementInList(currentState.elements, handleInfo.elementId)
-        if (el) {
-          resizeStartRef.current = { x: canvasPos.x, y: canvasPos.y, elX: el.x, elY: el.y, elW: el.width, elH: el.height, fontSize: el.fontSize }
-        }
-        return
-      }
-
-      if (e.shiftKey) {
-        currentState.toggleElementSelection(element.id)
-      } else if (!currentState.selectedElementIds.includes(element.id)) {
-        setSelectedElementIds([element.id])
-      }
-
-      setIsDragging(true)
-      dragStartRef.current = { x: e.clientX, y: e.clientY }
-
-      const selectedIds = e.shiftKey ? [...currentState.selectedElementIds] : [element.id]
-      const starts: Record<string, { x: number; y: number }> = {}
-      selectedIds.forEach((id) => {
-        const el = findElementInList(currentState.elements, id)
-        if (el) starts[id] = { x: el.x, y: el.y }
-      })
-      if (!starts[element.id]) {
-        const el = findElementInList(currentState.elements, element.id)
-        if (el) starts[element.id] = { x: el.x, y: el.y }
-      }
-      dragElementStartsRef.current = starts
-    },
-    [screenToCanvas, findResizeHandle, setSelectedElementIds]
-  )
-
-  // Handle double click on elements (enter frame, edit text)
-  const handleElementDoubleClick = useCallback(
-    (element: DesignElement, e: React.MouseEvent) => {
-      e.stopPropagation()
-      const state = useEditorStore.getState()
-      // Only handle double-click for move tool
-      if (state.activeTool !== 'move') return
-      if (element.type === 'frame' || element.type === 'group') {
-        enterFrame(element.id)
-      } else if (element.type === 'text') {
-        setEditingTextId(element.id)
-      }
-    },
-    [enterFrame]
-  )
-
-  // simplifyPath and perpendicularDistance are imported from @/lib/element-utils
-
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      // Right-click handling: select element under cursor, then let context menu handle
-      if (e.button === 2) {
-        const canvasPos = screenToCanvas(e.clientX, e.clientY)
-        const clickedEl = findElementAtPosition(canvasPos.x, canvasPos.y)
-        if (clickedEl && !selectedElementIds.includes(clickedEl.id)) {
-          setSelectedElementIds([clickedEl.id])
-        }
-        // Don't prevent default or stop propagation - let context menu handle
-        return
-      }
-
-      if (e.button === 1 || activeTool === 'hand' || spaceHeld) {
-        setIsPanning(true)
-        panStartRef.current = { x: e.clientX, y: e.clientY, panX, panY }
-        e.preventDefault()
-        return
-      }
-
-      if (e.button !== 0) return
-
-      const canvasPos = screenToCanvas(e.clientX, e.clientY)
-
-      if (selectedElementIds.length === 1) {
-        const handleInfo = findResizeHandle(canvasPos.x, canvasPos.y)
-        if (handleInfo) {
-          setIsResizing(true)
-          setActiveResizeHandle(handleInfo.handle)
-          resizeElementIdRef.current = handleInfo.elementId
-          const el = findElementInList(useEditorStore.getState().elements, handleInfo.elementId)
-          if (el) {
-            resizeStartRef.current = { x: canvasPos.x, y: canvasPos.y, elX: el.x, elY: el.y, elW: el.width, elH: el.height, fontSize: el.fontSize }
-          }
-          return
-        }
-      }
-
-      if (['rectangle', 'ellipse', 'line', 'frame', 'polygon', 'star', 'arrow'].includes(activeTool)) {
-        setDrawStart(canvasPos)
-        setDrawCurrent(canvasPos)
-        setIsDrawing(true)
-        return
-      }
-
-      if (activeTool === 'text') {
-        const state = useEditorStore.getState()
-        const id = generateId('text')
-        const fontSize = 18
-        const text = 'Text'
-        // Auto-calculate width based on font size (approximate)
-        const approxCharWidth = fontSize * 0.6
-        const autoWidth = Math.max(100, text.length * approxCharWidth + 20)
-        const autoHeight = Math.round(fontSize * 1.4 * 2)
-        const newEl: DesignElement = {
-          id, name: 'Text', type: 'text',
-          x: Math.round(canvasPos.x - autoWidth / 2), y: Math.round(canvasPos.y - autoHeight / 2), width: autoWidth, height: autoHeight,
-          fill: 'transparent', stroke: 'transparent', strokeWidth: 0, strokeStyle: 'solid', strokeAlign: 'center',
-          cornerRadius: 0, cornerRadiusTL: 0, cornerRadiusTR: 0, cornerRadiusBL: 0, cornerRadiusBR: 0,
-          opacity: 100, rotation: 0, visible: true, locked: false,
-          blendMode: 'normal', flipH: false, flipV: false, clipContent: false,
-          textContent: text, fontFamily: 'Inter', fontSize, fontWeight: 400, textAlign: 'center', textColor: '#ffffff', lineHeight: 1.4, letterSpacing: 0,
-        }
-        addElement(newEl)
-        // Auto-detect if inside a frame (addElement already handles currentFrameId)
-        const parentFrame = findParentFrameAtPosition(canvasPos.x, canvasPos.y, [newEl.id])
-        if (parentFrame && parentFrame.id !== currentFrameId) {
-          moveElementToFrame(newEl.id, parentFrame.id)
-        }
-        setSelectedElementIds([id])
-        setActiveTool('move')
-        setEditingTextId(id)
-        pushHistory()
-        return
-      }
-
-      if (activeTool === 'pen') {
-        // Check if clicking near first point to close path
-        if (penPoints.length >= 3) {
-          const firstPt = penPoints[0]
-          const dist = Math.sqrt((canvasPos.x - firstPt.x) ** 2 + (canvasPos.y - firstPt.y) ** 2)
-          if (dist < 8 / safeZoom) {
-            // Close the path
-            syncPenElement(penPoints, true)
-            if (penElementIdRef.current) {
-              const parentFrame = findParentFrameAtPosition(penPoints[0].x, penPoints[0].y, [penElementIdRef.current])
-              if (parentFrame && parentFrame.id !== currentFrameId) {
-                moveElementToFrame(penElementIdRef.current, parentFrame.id)
-              }
-              setSelectedElementIds([penElementIdRef.current])
-              pushHistory()
-            }
-            penElementIdRef.current = null
-            setPenPoints([])
-            setPenDragStart(null)
-            setPenCursorPos(null)
-            return
-          }
-        }
-        // Add a new point
-        const newPoints = [...penPoints, { x: canvasPos.x, y: canvasPos.y }]
-        setPenPoints(newPoints)
-        setPenCursorPos(canvasPos)
-        // Sync element in store (creates on first click, updates on subsequent)
-        syncPenElement(newPoints, false)
-        setPenDragStart({ x: canvasPos.x, y: canvasPos.y, pointIndex: newPoints.length - 1 })
-        return
-      }
-
-      if (activeTool === 'pencil') {
-        setIsPencilDrawing(true)
-        setPencilPoints([canvasPos])
-        return
-      }
-
-      if (activeTool === 'image') {
-        // Image tool handled on mouseUp (file picker)
-        return
-      }
-
-      if (activeTool === 'eyedropper') {
-        // Sample color at click position
-        setEyedropperPos(canvasPos)
-        return
-      }
-
-      if (activeTool === 'move') {
-        const clickedEl = findElementAtPosition(canvasPos.x, canvasPos.y)
-        if (clickedEl) {
-          handleElementMouseDown(clickedEl, e)
-          return
-        }
-        if (!e.shiftKey) {
-          setSelectedElementIds([])
-        }
-        rubberBandStartRef.current = canvasPos
-        setRubberBand({ startX: canvasPos.x, startY: canvasPos.y, endX: canvasPos.x, endY: canvasPos.y })
-        return
-      }
-
-      setSelectedElementIds([])
-    },
-    [activeTool, spaceHeld, panX, panY, screenToCanvas, findResizeHandle, selectedElementIds, findElementAtPosition, handleElementMouseDown, addElement, pushHistory, setSelectedElementIds, setActiveTool, penPoints, penDragStart, zoom, currentFrameId, moveElementToFrame, findParentFrameAtPosition, syncPenElement]
-  )
-
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent) => {
-      if (isPanning) {
-        const dx = e.clientX - panStartRef.current.x
-        const dy = e.clientY - panStartRef.current.y
-        setPan(panStartRef.current.panX + dx, panStartRef.current.panY + dy)
-        return
-      }
-
-      if (isResizing && resizeStartRef.current && resizeElementIdRef.current && activeResizeHandle) {
-        const canvasPos = screenToCanvas(e.clientX, e.clientY)
-        const start = resizeStartRef.current
-        const handle = activeResizeHandle
-        const dx = canvasPos.x - start.x
-        const dy = canvasPos.y - start.y
-        const shiftHeld = e.shiftKey
-        const altHeld = e.altKey
-
-        if (handle === 'rotate') {
-          const el = findElementInList(useEditorStore.getState().elements, resizeElementIdRef.current)
-          if (el) {
-            const centerX = el.x + el.width / 2
-            const centerY = el.y + el.height / 2
-            let angle = Math.atan2(canvasPos.y - centerY, canvasPos.x - centerX) * (180 / Math.PI) + 90
-            if (shiftHeld) {
-              angle = Math.round(angle / 15) * 15
-            }
-            updateElement(resizeElementIdRef.current, { rotation: Math.round(angle) % 360 })
-          }
-          return
-        }
-
-        let newX = start.elX
-        let newY = start.elY
-        let newW = start.elW
-        let newH = start.elH
-
-        if (altHeld) {
-          if (handle.includes('w') || handle === 'nw' || handle === 'sw') {
-            newX = start.elX + dx / 2
-            newW = start.elW - dx
-          }
-          if (handle.includes('e') || handle === 'ne' || handle === 'se') {
-            newW = start.elW + dx
-            newX = start.elX - dx / 2
-          }
-          if (handle.includes('n') || handle === 'nw' || handle === 'ne') {
-            newY = start.elY + dy / 2
-            newH = start.elH - dy
-          }
-          if (handle.includes('s') || handle === 'sw' || handle === 'se') {
-            newH = start.elH + dy
-            newY = start.elY - dy / 2
-          }
-        } else {
-          if (handle.includes('w') || handle === 'nw' || handle === 'sw') {
-            newX = start.elX + dx
-            newW = start.elW - dx
-          }
-          if (handle.includes('e') || handle === 'ne' || handle === 'se') {
-            newW = start.elW + dx
-          }
-          if (handle.includes('n') || handle === 'nw' || handle === 'ne') {
-            newY = start.elY + dy
-            newH = start.elH - dy
-          }
-          if (handle.includes('s') || handle === 'sw' || handle === 'se') {
-            newH = start.elH + dy
-          }
-        }
-
-        if (shiftHeld && (handle === 'nw' || handle === 'ne' || handle === 'se' || handle === 'sw')) {
-          const aspect = start.elW / start.elH
-          if (Math.abs(dx) > Math.abs(dy)) {
-            newH = newW / aspect
-            if (handle.includes('n')) newY = start.elY + start.elH - newH
-          } else {
-            newW = newH * aspect
-            if (handle.includes('w')) newX = start.elX + start.elW - newW
-          }
-        }
-
-        if (newW < 2) { newW = 2; if (handle.includes('w')) newX = start.elX + start.elW - 2 }
-        if (newH < 2) { newH = 2; if (handle.includes('n')) newY = start.elY + start.elH - 2 }
-
-        // Text elements: scale fontSize proportionally with resize (Figma behavior)
-        const resizeId = resizeElementIdRef.current
-        const resizeEl = findElementInList(useEditorStore.getState().elements, resizeId)
-        const resizeUpdates: Record<string, number> = { x: Math.round(newX), y: Math.round(newY), width: Math.round(newW), height: Math.round(newH) }
-        if (resizeEl?.type === 'text' && start.fontSize) {
-          const scaleX = newW / start.elW
-          const scaleY = newH / start.elH
-          const scale = Math.min(scaleX, scaleY)
-          const newFontSize = Math.max(1, Math.round(start.fontSize * scale))
-          resizeUpdates.fontSize = newFontSize
-        }
-
-        // Throttle resize updates using RAF for smoothness
-        cancelAnimationFrame(dragRafRef.current)
-        pendingDragUpdate.current = [{ id: resizeId, updates: resizeUpdates }]
-        dragRafRef.current = requestAnimationFrame(() => {
-          if (pendingDragUpdate.current) {
-            const s = useEditorStore.getState()
-            for (const { id, updates: u } of pendingDragUpdate.current) {
-              s.updateElement(id, u)
-            }
-            pendingDragUpdate.current = null
-          }
-        })
-        return
-      }
-
-      if (isDragging && dragStartRef.current) {
-        const state = useEditorStore.getState()
-        const dx = (e.clientX - dragStartRef.current.x) / zoom
-        const dy = (e.clientY - dragStartRef.current.y) / zoom
-
-        // Alt+drag to duplicate
-        if (e.altKey && !dragDuplicates) {
-          const dups: DesignElement[] = []
-          Object.entries(dragElementStartsRef.current).forEach(([id, startPos]) => {
-            const el = findElementInList(state.elements, id)
-            if (el) {
-              const dup = { ...JSON.parse(JSON.stringify(el)), id: generateId(el.type), name: `${el.name} copy` }
-              if (dup.children) dup.children = dup.children.map((c: DesignElement) => ({ ...c, id: generateId(c.type) }))
-              dups.push(dup)
-            }
-          })
-          setDragDuplicates(dups)
-        }
-
-        // Calculate snap for the primary element
-        const primaryId = Object.keys(dragElementStartsRef.current)[0]
-        const primaryStart = dragElementStartsRef.current[primaryId]
-        if (primaryStart) {
-          const primaryEl = findElementInList(state.elements, primaryId)
-          if (primaryEl) {
-            const tempEl = { ...primaryEl, x: primaryStart.x + dx, y: primaryStart.y + dy }
-            const snap = calculateSnapLines(tempEl, state.elements, state.selectedElementIds, gridSize, snapToGrid, snapToElements)
-            setSnapLines(snap.snapLines)
-            
-            const actualDx = snap.snapX !== null ? snap.snapX - primaryStart.x : dx
-            const actualDy = snap.snapY !== null ? snap.snapY - primaryStart.y : dy
-
-            // Batch drag updates using RAF for smoother editing
-            const updates: { id: string; updates: Partial<DesignElement> }[] = []
-            Object.entries(dragElementStartsRef.current).forEach(([id, startPos]) => {
-              updates.push({ id, updates: { x: Math.round(startPos.x + actualDx), y: Math.round(startPos.y + actualDy) } })
-            })
-            cancelAnimationFrame(dragRafRef.current)
-            pendingDragUpdate.current = updates
-            dragRafRef.current = requestAnimationFrame(() => {
-              if (pendingDragUpdate.current) {
-                const s = useEditorStore.getState()
-                for (const { id, updates: u } of pendingDragUpdate.current) {
-                  s.updateElement(id, u)
-                }
-                pendingDragUpdate.current = null
-              }
-            })
-          }
-        }
-
-        // Check if we're dragging over a frame for drop target
-        if (selectedElementIds.length > 0) {
-          const canvasPos = screenToCanvas(e.clientX, e.clientY)
-          let foundFrame: DesignElement | null = null
-          for (let i = state.elements.length - 1; i >= 0; i--) {
-            const el = state.elements[i]
-            if ((el.type === 'frame' || el.type === 'group') && !selectedElementIds.includes(el.id)) {
-              if (canvasPos.x >= el.x && canvasPos.x <= el.x + el.width &&
-                  canvasPos.y >= el.y && canvasPos.y <= el.y + el.height) {
-                foundFrame = el
-                break
-              }
-            }
-          }
-          setDropTargetFrameId(foundFrame ? foundFrame.id : null)
-        }
-
-        return
-      }
-
-      if (isDrawing && drawStart) {
-        const canvasPos = screenToCanvas(e.clientX, e.clientY)
-        if (activeTool === 'line' && e.shiftKey) {
-          const constrained = constrainToAngle(drawStart.x, drawStart.y, canvasPos.x, canvasPos.y)
-          setDrawCurrent(constrained)
-        } else {
-          setDrawCurrent(canvasPos)
-        }
-      }
-
-      // Pencil drawing
-      if (isPencilDrawing) {
-        const canvasPos = screenToCanvas(e.clientX, e.clientY)
-        cancelAnimationFrame(pencilRafRef.current)
-        pencilRafRef.current = requestAnimationFrame(() => {
-          setPencilPoints(prev => [...prev, canvasPos])
-        })
-      }
-
-      // Pen tool: update bezier handles during drag, or track cursor position for preview line
-      if (activeTool === 'pen' && penPoints.length > 0) {
-        const canvasPos = screenToCanvas(e.clientX, e.clientY)
-        if (penDragStart) {
-          // Dragging to create bezier handles
-          const dx = canvasPos.x - penDragStart.x
-          const dy = canvasPos.y - penDragStart.y
-          setPenPoints(prev => {
-            const updated = [...prev]
-            const idx = penDragStart.pointIndex
-            if (idx < updated.length) {
-              // Symmetric bezier handles: handle1 is mirror of handle2 relative to point
-              updated[idx] = {
-                ...updated[idx],
-                cx1: updated[idx].x - dx,
-                cy1: updated[idx].y - dy,
-                cx2: updated[idx].x + dx,
-                cy2: updated[idx].y + dy,
-              }
-            }
-            return updated
-          })
-        } else {
-          setPenCursorPos(canvasPos)
-        }
-      }
-
-      // Eyedropper tracking
-      if (activeTool === 'eyedropper') {
-        const canvasPos = screenToCanvas(e.clientX, e.clientY)
-        setEyedropperPos(canvasPos)
-      }
-
-      // Path editing: drag anchor or tangent handle
-      if (editingPathId && editingDragType && editingDragStartRef.current) {
-        const canvasPos = screenToCanvas(e.clientX, e.clientY)
-        const state = useEditorStore.getState()
-        const el = findElementInList(state.elements, editingPathId)
-        if (el) {
-          const network = getVectorNetwork(el)
-          const absPos = getAbsolutePosition(editingPathId)
-          const elX = absPos?.x ?? el.x
-          const elY = absPos?.y ?? el.y
-          const dx = canvasPos.x - screenToCanvas(editingDragStartRef.current.x, editingDragStartRef.current.y).x
-          const dy = canvasPos.y - screenToCanvas(editingDragStartRef.current.x, editingDragStartRef.current.y).y
-
-          if (editingDragType === 'anchor' && editingPointIndex !== null) {
-            const v = network.vertices[editingPointIndex]
-            if (v) {
-              const newX = editingDragStartRef.current.origX + dx - elX
-              const newY = editingDragStartRef.current.origY + dy - elY
-              const newNetwork = updateVertexInNetwork(network, editingPointIndex, newX, newY)
-              state.updateElement(editingPathId, { vectorNetwork: newNetwork })
-            }
-          } else if ((editingDragType === 'tangentStart' || editingDragType === 'tangentEnd') && editingDragSegIdx !== null) {
-            const seg = network.segments[editingDragSegIdx]
-            if (seg) {
-              const vertexIdx = editingDragType === 'tangentStart' ? seg.start : seg.end
-              const v = network.vertices[vertexIdx]
-              if (v) {
-                const newTanX = editingDragStartRef.current.origX + dx - elX - v.x
-                const newTanY = editingDragStartRef.current.origY + dy - elY - v.y
-                const newNetwork = setTangentInNetwork(network, editingPointIndex ?? vertexIdx, editingDragType === 'tangentStart' ? 'start' : 'end', { x: newTanX, y: newTanY }, e.altKey ? 'NONE' : 'ANGLE')
-                state.updateElement(editingPathId, { vectorNetwork: newNetwork })
-              }
-            }
-          }
-        }
-        return
-      }
-
-      // Hover tracking - show highlight on element under cursor when using move tool
-      if (activeTool === 'move' && !isDragging && !isResizing) {
-        const canvasPos = screenToCanvas(e.clientX, e.clientY)
-        const hoveredEl = findElementAtPosition(canvasPos.x, canvasPos.y)
-        setHoveredElementId(hoveredEl ? hoveredEl.id : null)
-      } else {
-        setHoveredElementId(null)
-      }
-
-      if (rubberBandStartRef.current) {
-        const canvasPos = screenToCanvas(e.clientX, e.clientY)
-        setRubberBand({
-          startX: rubberBandStartRef.current.x,
-          startY: rubberBandStartRef.current.y,
-          endX: canvasPos.x,
-          endY: canvasPos.y,
-        })
-      }
-    },
-    [isPanning, isResizing, isDragging, isDrawing, drawStart, activeTool, rubberBandStartRef, screenToCanvas, setPan, zoom, updateElement, snapToGrid, snapToElements, gridSize, dragDuplicates, drawCurrent, isPencilDrawing, selectedElementIds, penDragStart]
-  )
-
-  const handleMouseUp = useCallback(
-    (e: React.MouseEvent) => {
-      // Flush any pending RAF drag/resize updates before handling mouse up
-      cancelAnimationFrame(dragRafRef.current)
-      if (pendingDragUpdate.current) {
-        const s = useEditorStore.getState()
-        for (const { id, updates } of pendingDragUpdate.current) {
-          s.updateElement(id, updates)
-        }
-        pendingDragUpdate.current = null
-      }
-
-      // Finish pen drag operation if active
-      if (activeTool === 'pen' && penDragStart) {
-        // If drag distance was very small, remove the bezier handles (treat as a simple click)
-        setPenPoints(prev => {
-          const updated = [...prev]
-          const idx = penDragStart.pointIndex
-          if (idx < updated.length) {
-            const pt = updated[idx]
-            // Check if handles are essentially at the same position as the point (no meaningful drag)
-            const handleDist1 = pt.cx1 !== undefined && pt.cy1 !== undefined ? Math.sqrt((pt.cx1 - pt.x) ** 2 + (pt.cy1 - pt.y) ** 2) : 0
-            const handleDist2 = pt.cx2 !== undefined && pt.cy2 !== undefined ? Math.sqrt((pt.cx2 - pt.x) ** 2 + (pt.cy2 - pt.y) ** 2) : 0
-            if (handleDist1 < 2 / safeZoom && handleDist2 < 2 / safeZoom) {
-              // Remove handles - this was a simple click, not a drag
-              const { cx1, cy1, cx2, cy2, ...rest } = pt
-              updated[idx] = rest as typeof pt
-            }
-          }
-          return updated
-        })
-        setPenDragStart(null)
-        return
-      }
-
-      // Path editing: finish drag
-      if (editingPathId && editingDragType) {
-        pushHistory()
-        setEditingDragType(null)
-        setEditingDragSegIdx(null)
-        editingDragStartRef.current = null
-        return
-      }
-
-      if (isPanning) {
-        setIsPanning(false)
-        return
-      }
-
-      if (isResizing) {
-        pushHistory()
-        setIsResizing(false)
-        setActiveResizeHandle(null)
-        resizeElementIdRef.current = null
-        resizeStartRef.current = null
-        return
-      }
-
-      if (isDragging) {
-        // Check if dropping into a frame
-        if (dropTargetFrameId) {
-          const state = useEditorStore.getState()
-          const frame = findElementInList(state.elements, dropTargetFrameId)
-          if (frame && (frame.type === 'frame' || frame.type === 'group')) {
-            for (const id of selectedElementIds) {
-              state.moveElementToFrame(id, dropTargetFrameId)
-            }
-          }
-        }
-        pushHistory()
-        setIsDragging(false)
-        dragStartRef.current = null
-        dragElementStartsRef.current = {}
-        setDragDuplicates(null)
-        setSnapLines([])
-        setDropTargetFrameId(null)
-        return
-      }
-
-      // Pencil drawing complete
-      if (isPencilDrawing && pencilPoints.length >= 2) {
-        const simplified = simplifyPath(pencilPoints, 2)
-        
-        // Calculate bounding box
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-        simplified.forEach(pt => {
-          minX = Math.min(minX, pt.x)
-          minY = Math.min(minY, pt.y)
-          maxX = Math.max(maxX, pt.x)
-          maxY = Math.max(maxY, pt.y)
-        })
-
-        if (maxX - minX > 2 || maxY - minY > 2) {
-          // Convert to local coordinates then smooth via Catmull-Rom
-          const localPoints = simplified.map(pt => ({
-            x: pt.x - minX,
-            y: pt.y - minY,
-          }))
-          const smoothPathPoints = smoothPointsToPathPoints(localPoints, 0.5)
-          const pathPoints = smoothPathPoints
-
-          // Build VectorNetwork from smoothed points (with bezier handles)
-          const pencilVectorNetwork = pathPointsToVectorNetwork(pathPoints, false)
-
-          const newEl: DesignElement = {
-            id: generateId('path'), name: 'Pencil Path', type: 'path',
-            x: Math.round(minX), y: Math.round(minY),
-            width: Math.round(maxX - minX), height: Math.round(maxY - minY),
-            fill: 'transparent', stroke: '#000000', strokeWidth: 2, strokeStyle: 'solid', strokeAlign: 'center',
-            cornerRadius: 0, cornerRadiusTL: 0, cornerRadiusTR: 0, cornerRadiusBL: 0, cornerRadiusBR: 0,
-            opacity: 100, rotation: 0, visible: true, locked: false,
-            blendMode: 'normal', flipH: false, flipV: false, clipContent: false,
-            pathPoints, pathClosed: false,
-            vectorNetwork: pencilVectorNetwork,
-          }
-          addElement(newEl)
-          // Auto-detect if inside a frame
-          const parentFrame = findParentFrameAtPosition(minX, minY, [newEl.id])
-          if (parentFrame && parentFrame.id !== currentFrameId) {
-            moveElementToFrame(newEl.id, parentFrame.id)
-          }
-          setSelectedElementIds([newEl.id])
-          pushHistory()
-        }
-        setIsPencilDrawing(false)
-        setPencilPoints([])
-        return
-      }
-      setIsPencilDrawing(false)
-      setPencilPoints([])
-
-      // Eyedropper color sampling
-      if (activeTool === 'eyedropper' && eyedropperPos) {
-        const svgEl = containerRef.current?.querySelector('svg')
-        if (svgEl) {
-          try {
-            const svgString = new XMLSerializer().serializeToString(svgEl)
-            const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' })
-            const url = URL.createObjectURL(blob)
-            const img = new Image()
-            img.onload = () => {
-              const canvas = document.createElement('canvas')
-              canvas.width = svgEl.clientWidth
-              canvas.height = svgEl.clientHeight
-              const ctx = canvas.getContext('2d', { willReadFrequently: true })
-              if (ctx) {
-                ctx.drawImage(img, 0, 0)
-                const rect = containerRef.current?.getBoundingClientRect()
-                if (rect) {
-                  const px = e.clientX - rect.left
-                  const py = e.clientY - rect.top
-                  const pixel = ctx.getImageData(Math.round(px), Math.round(py), 1, 1)
-                  if (pixel && pixel.data[3] > 0) {
-                    const [r, g, b] = pixel.data
-                    const hex = '#' + r.toString(16).padStart(2, '0') + g.toString(16).padStart(2, '0') + b.toString(16).padStart(2, '0')
-                    // Apply to selected element's fill
-                    const state = useEditorStore.getState()
-                    if (state.selectedElementIds.length > 0) {
-                      const id = state.selectedElementIds[0]
-                      state.updateElement(id, { fill: hex })
-                      state.pushHistory()
-                    }
-                  }
-                }
-              }
-              URL.revokeObjectURL(url)
-            }
-            img.src = url
-          } catch (err) {
-            console.error('Eyedropper error:', err)
-          }
-        }
-        setEyedropperPos(null)
-        return
-      }
-
-      if (isDrawing && drawStart && drawCurrent) {
-        const x = Math.min(drawStart.x, drawCurrent.x)
-        const y = Math.min(drawStart.y, drawCurrent.y)
-        const width = Math.abs(drawCurrent.x - drawStart.x)
-        const height = Math.abs(drawCurrent.y - drawStart.y)
-
-        if (width > 2 || height > 2 || activeTool === 'line' || activeTool === 'arrow') {
-          if (activeTool === 'line') {
-            elementCounterRef.current++
-            const newEl: DesignElement = {
-              id: generateId('line'), name: `Line ${elementCounterRef.current}`, type: 'line',
-              x: Math.round(drawStart.x), y: Math.round(drawStart.y),
-              width: Math.round(drawCurrent.x - drawStart.x), height: Math.round(drawCurrent.y - drawStart.y),
-              fill: 'transparent', stroke: '#000000', strokeWidth: 2, strokeStyle: 'solid', strokeAlign: 'center',
-              cornerRadius: 0, cornerRadiusTL: 0, cornerRadiusTR: 0, cornerRadiusBL: 0, cornerRadiusBR: 0,
-              opacity: 100, rotation: 0, visible: true, locked: false,
-              blendMode: 'normal', flipH: false, flipV: false, clipContent: false,
-            }
-            addElement(newEl)
-            // Auto-detect if inside a frame (addElement already handles currentFrameId)
-            const parentFrame = findParentFrameAtPosition(x, y, [newEl.id])
-            if (parentFrame && parentFrame.id !== currentFrameId) {
-              moveElementToFrame(newEl.id, parentFrame.id)
-            }
-            setSelectedElementIds([newEl.id])
-          } else if (activeTool === 'arrow') {
-            elementCounterRef.current++
-            const newEl: DesignElement = {
-              id: generateId('arrow'), name: `Arrow ${elementCounterRef.current}`, type: 'arrow',
-              x: Math.round(drawStart.x), y: Math.round(drawStart.y),
-              width: Math.round(drawCurrent.x - drawStart.x), height: Math.round(drawCurrent.y - drawStart.y),
-              fill: 'transparent', stroke: '#000000', strokeWidth: 2, strokeStyle: 'solid', strokeAlign: 'center',
-              cornerRadius: 0, cornerRadiusTL: 0, cornerRadiusTR: 0, cornerRadiusBL: 0, cornerRadiusBR: 0,
-              opacity: 100, rotation: 0, visible: true, locked: false,
-              blendMode: 'normal', flipH: false, flipV: false, clipContent: false,
-              arrowHeadStyle: 'arrow',
-            }
-            addElement(newEl)
-            // Auto-detect if inside a frame (addElement already handles currentFrameId)
-            const parentFrame = findParentFrameAtPosition(x, y, [newEl.id])
-            if (parentFrame && parentFrame.id !== currentFrameId) {
-              moveElementToFrame(newEl.id, parentFrame.id)
-            }
-            setSelectedElementIds([newEl.id])
-          } else {
-            const defaults: Record<string, { fill: string; stroke: string; strokeWidth: number; sides?: number; innerRadius?: number }> = {
-              rectangle: { fill: '#D9D9D9', stroke: 'transparent', strokeWidth: 0 },
-              ellipse: { fill: '#D9D9D9', stroke: 'transparent', strokeWidth: 0 },
-              frame: { fill: '#FFFFFF', stroke: '#E0E0E0', strokeWidth: 1 },
-              polygon: { fill: '#D9D9D9', stroke: 'transparent', strokeWidth: 0, sides: 6 },
-              star: { fill: '#FFD93D', stroke: 'transparent', strokeWidth: 0, sides: 5, innerRadius: 40 },
-            }
-            const td = defaults[activeTool] || { fill: '#D9D9D9', stroke: 'transparent', strokeWidth: 0 }
-            elementCounterRef.current++
-            const newEl: DesignElement = {
-              id: `${activeTool}-${Date.now()}`,
-              name: `${activeTool.charAt(0).toUpperCase() + activeTool.slice(1)} ${elementCounterRef.current}`,
-              type: activeTool as DesignElement['type'],
-              x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height),
-              fill: td.fill, stroke: td.stroke, strokeWidth: td.strokeWidth, strokeStyle: 'solid', strokeAlign: 'center',
-              cornerRadius: activeTool === 'frame' ? 8 : 0,
-              cornerRadiusTL: activeTool === 'frame' ? 8 : 0,
-              cornerRadiusTR: activeTool === 'frame' ? 8 : 0,
-              cornerRadiusBL: activeTool === 'frame' ? 8 : 0,
-              cornerRadiusBR: activeTool === 'frame' ? 8 : 0,
-              opacity: 100, rotation: 0, visible: true, locked: false,
-              blendMode: 'normal', flipH: false, flipV: false, clipContent: activeTool === 'frame',
-              ...(td.sides !== undefined ? { sides: td.sides } : {}),
-              ...(td.innerRadius !== undefined ? { innerRadius: td.innerRadius } : {}),
-            }
-            addElement(newEl)
-            // Auto-detect if inside a frame (addElement already handles currentFrameId)
-            // Don't auto-nest frames inside frames, but allow inside current frame
-            if (activeTool !== 'frame') {
-              const parentFrame = findParentFrameAtPosition(x, y, [newEl.id])
-              if (parentFrame && parentFrame.id !== currentFrameId) {
-                moveElementToFrame(newEl.id, parentFrame.id)
-              }
-            }
-            setSelectedElementIds([newEl.id])
-          }
-          pushHistory()
-        }
-
-        setIsDrawing(false)
-        setDrawStart(null)
-        setDrawCurrent(null)
-      }
-
-      // Image tool: open file picker on click
-      if (activeTool === 'image' && !isDragging && !isResizing && !rubberBand) {
-        const clientX = e.clientX
-        const clientY = e.clientY
-        const input = document.createElement('input')
-        input.type = 'file'
-        input.accept = 'image/*'
-        input.onchange = async (ev) => {
-          const file = (ev.target as HTMLInputElement).files?.[0]
-          if (!file || !isImageFile(file)) return
-          try {
-            const base64 = await loadImageAsBase64(file)
-            const pos = screenToCanvas(clientX, clientY)
-            const imgEl = await createImageElement(base64, pos.x, pos.y)
-            addElement(imgEl)
-            setSelectedElementIds([imgEl.id])
-            pushHistory()
-          } catch (err) {
-            console.error('Failed to load image:', err)
-          }
-        }
-        input.click()
-      }
-
-      if (rubberBand) {
-        const state = useEditorStore.getState()
-        const rbMinX = Math.min(rubberBand.startX, rubberBand.endX)
-        const rbMinY = Math.min(rubberBand.startY, rubberBand.endY)
-        const rbMaxX = Math.max(rubberBand.startX, rubberBand.endX)
-        const rbMaxY = Math.max(rubberBand.startY, rubberBand.endY)
-
-        if (Math.abs(rbMaxX - rbMinX) > 5 || Math.abs(rbMaxY - rbMinY) > 5) {
-          const selectedIds: string[] = []
-          const addSelected = (el: DesignElement, parentX = 0, parentY = 0) => {
-            if (!el.visible || el.locked) return
-            const absX = el.x + parentX
-            const absY = el.y + parentY
-            if (absX + el.width > rbMinX && absX < rbMaxX &&
-                absY + el.height > rbMinY && absY < rbMaxY) {
-              selectedIds.push(el.id)
-            }
-            if (el.children) el.children.forEach(c => addSelected(c, absX, absY))
-          }
-          state.elements.forEach(el => addSelected(el))
-          if (e.shiftKey) {
-            setSelectedElementIds([...new Set([...state.selectedElementIds, ...selectedIds])])
-          } else {
-            setSelectedElementIds(selectedIds)
-          }
-        }
-        setRubberBand(null)
-        rubberBandStartRef.current = null
-      }
-    },
-    [isPanning, isResizing, isDragging, isDrawing, drawStart, drawCurrent, rubberBand, activeTool, addElement, pushHistory, setSelectedElementIds, isPencilDrawing, pencilPoints, eyedropperPos, dropTargetFrameId, selectedElementIds]
-  )
-
-  const handleDoubleClick = useCallback(
-    (e: React.MouseEvent) => {
-      const canvasPos = screenToCanvas(e.clientX, e.clientY)
-      const clickedEl = findElementAtPosition(canvasPos.x, canvasPos.y)
-
-      // Enter frame/group on double-click
-      if (!clickedEl || clickedEl.type === 'frame' || clickedEl.type === 'group') {
-        if (clickedEl && (clickedEl.type === 'frame' || clickedEl.type === 'group')) {
-          enterFrame(clickedEl.id)
-        }
-        return
-      }
-
-      // Path editing mode
-      if (clickedEl.type === 'path') {
-        setEditingPathId(clickedEl.id)
-        setEditingPointIndex(null)
-        return
-      }
-
-      // Inline text editing
-      if (clickedEl.type === 'text') {
-        setEditingTextId(clickedEl.id)
-      }
-    },
-    [screenToCanvas, findElementAtPosition, enterFrame]
-  )
-
-  // Path editing: click on anchor point to select it
-  const handlePathAnchorClick = useCallback((e: React.MouseEvent, vertexIndex: number) => {
-    e.stopPropagation()
-    if (!editingPathId) return
-    setEditingPointIndex(vertexIndex)
-    setEditingDragType('anchor')
-    const state = useEditorStore.getState()
-    const el = findElementInList(state.elements, editingPathId)
-    if (!el) return
-    const network = getVectorNetwork(el)
-    const v = network.vertices[vertexIndex]
-    if (!v) return
-    const absPos = getAbsolutePosition(editingPathId)
-    const elX = absPos?.x ?? el.x
-    const elY = absPos?.y ?? el.y
-    editingDragStartRef.current = { x: e.clientX, y: e.clientY, origX: elX + v.x, origY: elY + v.y }
-  }, [editingPathId, getAbsolutePosition])
-
-  // Path editing: click on tangent handle to select it
-  const handlePathTangentClick = useCallback((e: React.MouseEvent, segIdx: number, side: 'start' | 'end') => {
-    e.stopPropagation()
-    if (!editingPathId) return
-    setEditingDragType(side === 'start' ? 'tangentStart' : 'tangentEnd')
-    setEditingDragSegIdx(segIdx)
-    const state = useEditorStore.getState()
-    const el = findElementInList(state.elements, editingPathId)
-    if (!el) return
-    const network = getVectorNetwork(el)
-    const seg = network.segments[segIdx]
-    if (!seg) return
-    const vertexIdx = side === 'start' ? seg.start : seg.end
-    const v = network.vertices[vertexIdx]
-    if (!v) return
-    const tangent = side === 'start' ? seg.tangentStart : seg.tangentEnd
-    const absPos = getAbsolutePosition(editingPathId)
-    const elX = absPos?.x ?? el.x
-    const elY = absPos?.y ?? el.y
-    const tanX = elX + v.x + (tangent?.x ?? 0)
-    const tanY = elY + v.y + (tangent?.y ?? 0)
-    editingDragStartRef.current = { x: e.clientX, y: e.clientY, origX: tanX, origY: tanY }
-  }, [editingPathId, getAbsolutePosition])
-
-  // Exit path editing mode
-  const exitPathEditing = useCallback(() => {
-    if (editingPathId) {
-      setEditingPathId(null)
-      setEditingPointIndex(null)
-      setEditingDragType(null)
-      setEditingDragSegIdx(null)
-      editingDragStartRef.current = null
-    }
-  }, [editingPathId])
-
-  // Handle image drop
-  const handleDrop = useCallback(
-    async (e: React.DragEvent) => {
-      e.preventDefault()
-      e.stopPropagation()
-
-      const files = Array.from(e.dataTransfer.files).filter(isImageFile)
-      if (files.length === 0) return
-
-      const canvasPos = screenToCanvas(e.clientX, e.clientY)
-
-      for (const file of files) {
-        try {
-          const base64 = await loadImageAsBase64(file)
-          const imgEl = await createImageElement(base64, canvasPos.x, canvasPos.y)
-          addElement(imgEl)
-          setSelectedElementIds([imgEl.id])
-          pushHistory()
-        } catch (err) {
-          console.error('Failed to load image:', err)
-        }
-      }
-    },
-    [screenToCanvas, pushHistory, addElement, setSelectedElementIds]
-  )
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'copy'
-  }, [])
-
-  // BRAKE: Block ALL browser shortcuts to make app feel native
-  // This runs in capture phase and prevents Ctrl+key combos from reaching the browser
-  useEffect(() => {
-    const BLOCKED_SHORTCUTS = new Set([
-      'KeyS', // Ctrl+S = Save dialog
-      'KeyR', // Ctrl+R = Refresh
-      'KeyL', // Ctrl+L = Address bar
-      'KeyH', // Ctrl+H = History
-      'KeyJ', // Ctrl+J = Downloads
-      'KeyU', // Ctrl+U = View source
-      'KeyP', // Ctrl+P = Print
-      'KeyN', // Ctrl+N = New window
-      'KeyT', // Ctrl+T = New tab
-      'KeyW', // Ctrl+W = Close tab
-      'KeyF', // Ctrl+F = Find (we handle our own)
-      'Comma', // Ctrl+, = Settings
-      'Period', // Ctrl+. = ?
-    ])
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const ctrl = e.ctrlKey || e.metaKey
-
-      // Block Ctrl+key combos that we don't handle
-      if (ctrl && !e.altKey) {
-        const code = e.code
-        // Allow Ctrl+Z (undo), Ctrl+Shift+Z (redo), Ctrl+Y (redo)
-        if (code === 'KeyZ' || code === 'KeyY') return
-        // Allow Ctrl+C, Ctrl+V, Ctrl+D, Ctrl+A, Ctrl+G
-        if (code === 'KeyC' || code === 'KeyV' || code === 'KeyD' || code === 'KeyA' || code === 'KeyG') return
-        // Allow Ctrl+/-, Ctrl+0, Ctrl+1, Ctrl+2
-        if (code === 'Equal' || code === 'Minus' || code === 'Digit0' || code === 'Digit1' || code === 'Digit2') return
-        // Allow Ctrl+], Ctrl+[, Ctrl+;
-        if (code === 'BracketRight' || code === 'BracketLeft' || code === 'Semicolon') return
-        // Allow Ctrl+' (apostrophe)
-        if (code === 'Quote') return
-        // Allow Ctrl+PageUp/PageDown
-        if (code === 'PageUp' || code === 'PageDown') return
-
-        // Block everything else
-        if (BLOCKED_SHORTCUTS.has(code)) {
-          e.preventDefault()
-          e.stopPropagation()
-          return
-        }
-      }
-
-      // Block Ctrl+Alt combos (browser features)
-      if (ctrl && e.altKey) {
-        e.preventDefault()
-        e.stopPropagation()
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown, { capture: true })
-    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true })
-  }, [])
-
-  // Other keyboard shortcuts (non-undo/redo)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const ctrl = e.ctrlKey || e.metaKey
-
-      // Allow typing in input fields and textareas (for non-undo/redo shortcuts)
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      // Don't intercept shortcuts when editing contentEditable text
-      if (e.target instanceof HTMLElement && e.target.isContentEditable) return
-      if (editingTextId) return
-
-      // Undo/redo
-      if (ctrl && e.code === 'KeyZ' && !e.shiftKey) {
-        e.preventDefault()
-        if (useEditorStore.getState().activeTool === 'pen' && penPointsRef.current.length > 0) {
-          const newLen = penPointsRef.current.length - 1
-          if (newLen < 1 && penElementIdRef.current) {
-            useEditorStore.getState().deleteElement(penElementIdRef.current)
-            penElementIdRef.current = null
-            setPenPoints([])
-          } else {
-            setPenPoints(prev => prev.slice(0, -1))
-          }
-          return
-        }
-        useEditorStore.getState().undo()
-        return
-      }
-      if (ctrl && e.code === 'KeyZ' && e.shiftKey) {
-        e.preventDefault()
-        useEditorStore.getState().redo()
-        return
-      }
-      if (ctrl && e.code === 'KeyY') {
-        e.preventDefault()
-        useEditorStore.getState().redo()
-        return
-      }
-
-      // Prevent Alt key from activating browser menu bar
-      if (e.key === 'Alt') {
-        e.preventDefault()
-        setAltHeld(true)
-      }
-
-      if (e.key === ' ' && !spaceHeld) {
-        e.preventDefault()
-        setSpaceHeld(true)
-      }
-
-      const state = useEditorStore.getState()
-
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        // Path editing: delete selected point
-        if (editingPathId && editingPointIndex !== null) {
-          e.preventDefault()
-          const el = findElementInList(state.elements, editingPathId)
-          if (el) {
-            const network = getVectorNetwork(el)
-            if (network.vertices.length > 2) {
-              const newVertices = network.vertices.filter((_, i) => i !== editingPointIndex)
-              const newSegments = network.segments
-                .filter(s => s.start !== editingPointIndex && s.end !== editingPointIndex)
-                .map(s => ({
-                  ...s,
-                  start: s.start > editingPointIndex ? s.start - 1 : s.start,
-                  end: s.end > editingPointIndex ? s.end - 1 : s.end,
-                }))
-              const newNetwork = { ...network, vertices: newVertices, segments: newSegments }
-              state.updateElement(editingPathId, { vectorNetwork: newNetwork })
-              state.pushHistory()
-              setEditingPointIndex(null)
-            }
-          }
-          return
-        }
-        e.preventDefault()
-        state.deleteSelectedElements()
-        state.pushHistory()
-      }
-
-      // Enter key to finish pen path (Figma behavior)
-      if (e.key === 'Enter' && penPoints.length > 0) {
-        e.preventDefault()
-        finishPenPath()
-        return
-      }
-
-      if (e.key === 'Escape') {
-        // Exit path editing mode first
-        if (editingPathId) {
-          exitPathEditing()
-        } else if (isPencilDrawing || pencilPoints.length > 0) {
-          setIsPencilDrawing(false)
-          setPencilPoints([])
-        } else if (penPoints.length > 0) {
-          // Finish pen path
-          finishPenPath()
-        } else if (currentFrameId) {
-          exitFrame()
-        } else {
-          setSelectedElementIds([])
-          setIsDrawing(false)
-          setDrawStart(null)
-          setDrawCurrent(null)
-          setEditingTextId(null)
-          if (activeTool !== 'move') setActiveTool('move')
-        }
-      }
-
-      if (ctrl && e.key === 'c') { e.preventDefault(); state.copySelected() }
-      if (ctrl && e.key === 'v') { e.preventDefault(); state.pasteClipboard(); state.pushHistory() }
-      if (ctrl && e.key === 'd') { e.preventDefault(); state.duplicateSelectedElements(); state.pushHistory() }
-      if (ctrl && e.key === 'a') { e.preventDefault(); state.selectAll() }
-
-      if (ctrl && e.key === 'g' && !e.shiftKey) {
-        e.preventDefault()
-        if (state.selectedElementIds.length >= 2) { state.groupElements(state.selectedElementIds); state.pushHistory() }
-      }
-      if (ctrl && e.key === 'g' && e.shiftKey) {
-        e.preventDefault()
-        if (state.selectedElementIds.length === 1) { state.ungroupElements(state.selectedElementIds[0]); state.pushHistory() }
-      }
-
-      // Zoom shortcuts
-      if (ctrl && e.key === '=') { e.preventDefault(); state.setZoom(state.zoom + 0.1) }
-      if (ctrl && e.key === '-') { e.preventDefault(); state.setZoom(state.zoom - 0.1) }
-      if (ctrl && e.key === '0') { e.preventDefault(); fitToScreen() }
-      if (ctrl && e.key === '1' && !e.shiftKey) { e.preventDefault(); state.setZoom(1); state.setPan(0, 0) }
-      if (ctrl && e.shiftKey && e.key === '1') { e.preventDefault(); fitToScreen() }
-      if (ctrl && e.key === '2') { e.preventDefault(); zoomToSelection() }
-      // +/- without modifier for zoom
-      if (!ctrl && !e.shiftKey && !e.altKey && e.key === '=') { state.setZoom(state.zoom + 0.1) }
-      if (!ctrl && !e.shiftKey && !e.altKey && e.key === '-') { state.setZoom(state.zoom - 0.1) }
-
-      // Page navigation (Ctrl+PageUp/PageDown like Figma)
-      if (ctrl && e.key === 'PageUp') {
-        e.preventDefault()
-        const idx = state.pages.findIndex((p) => p.id === state.activePageId)
-        if (idx > 0) state.setActivePage(state.pages[idx - 1].id)
-      }
-      if (ctrl && e.key === 'PageDown') {
-        e.preventDefault()
-        const idx = state.pages.findIndex((p) => p.id === state.activePageId)
-        if (idx < state.pages.length - 1) state.setActivePage(state.pages[idx + 1].id)
-      }
-
-      // Z-order shortcuts (Ctrl+] and Ctrl+[ like Figma)
-      if (ctrl && e.key === ']') { e.preventDefault(); state.selectedElementIds.forEach(id => state.bringForward(id)); state.pushHistory() }
-      if (ctrl && e.key === '[') { e.preventDefault(); state.selectedElementIds.forEach(id => state.sendBackward(id)); state.pushHistory() }
-
-      // Shift+2 for zoom to selection (Figma shortcut)
-      if (e.shiftKey && e.key === '2') { e.preventDefault(); zoomToSelection() }
-
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-        e.preventDefault()
-        const delta = e.shiftKey ? 10 : 1
-        state.selectedElementIds.forEach(id => {
-          const el = findElementInList(state.elements, id)
-          if (el) {
-            if (e.key === 'ArrowUp') state.updateElement(id, { y: el.y - delta })
-            if (e.key === 'ArrowDown') state.updateElement(id, { y: el.y + delta })
-            if (e.key === 'ArrowLeft') state.updateElement(id, { x: el.x - delta })
-            if (e.key === 'ArrowRight') state.updateElement(id, { x: el.x + delta })
-          }
-        })
-        state.pushHistory()
-      }
-
-      if (!ctrl && !e.shiftKey && !e.altKey) {
-        // Finalize pen path before switching tools via keyboard
-        const currentPenPoints = useEditorStore.getState().activeTool === 'pen' ? penPoints : []
-        if (e.key !== 'p' && e.key !== 'P' && currentPenPoints.length >= 2) {
-          finishPenPath()
-        }
-        if (e.key === 'v' || e.key === 'V') state.setActiveTool('move')
-        if (e.key === 'f' || e.key === 'F') state.setActiveTool('frame')
-        if (e.key === 'r' || e.key === 'R') state.setActiveTool('rectangle')
-        if (e.key === 'o' || e.key === 'O') state.setActiveTool('ellipse')
-        if (e.key === 'l' || e.key === 'L') state.setActiveTool('line')
-        if (e.key === 'p' || e.key === 'P') state.setActiveTool('pen')
-        if (e.key === 't' || e.key === 'T') state.setActiveTool('text')
-        if (e.key === 'h' || e.key === 'H') state.setActiveTool('hand')
-        if (e.key === 'i' || e.key === 'I') state.setActiveTool('eyedropper')
-        if (e.key === 'c' || e.key === 'C') state.setActiveTool('comment')
-        if (e.key === 's' || e.key === 'S') state.setActiveTool('slice')
-      }
-
-      // Shift+tool shortcuts (Figma variants)
-      if (!ctrl && e.shiftKey && !e.altKey) {
-        // Finalize pen path before switching tools via keyboard
-        if (penPoints.length >= 2) {
-          finishPenPath()
-        }
-        if (e.key === 'p' || e.key === 'P') state.setActiveTool('pencil')
-        if (e.key === 'r' || e.key === 'R') state.setActiveTool('polygon')
-        if (e.key === 'o' || e.key === 'O') state.setActiveTool('star')
-        if (e.key === 'l' || e.key === 'L') state.setActiveTool('arrow')
-        if (e.key === 'i' || e.key === 'I') state.setActiveTool('image')
-      }
-
-      // Toggle shortcuts
-      if (ctrl && e.key === ';') {
-        e.preventDefault()
-        state.setShowGrid(!state.showGrid)
-      }
-      if (ctrl && e.key === "'") {
-        e.preventDefault()
-        // Toggle snap to grid
-        state.setSnapToGrid(!state.snapToGrid)
-      }
-
-      // Ctrl+Alt shortcuts (Figma compatibility) - prevent browser defaults aggressively
-      if (ctrl && e.altKey) {
-        e.preventDefault()
-        e.stopPropagation()
-      }
-      if (ctrl && e.altKey && (e.key === 'k' || e.key === 'K')) {
-        state.selectedElementIds.forEach(id => {
-          const el = findElementInList(state.elements, id)
-          if (el && !el.isComponent) { state.addComponent(id); state.pushHistory() }
-        })
-      }
-      if (ctrl && e.altKey && (e.key === 'b' || e.key === 'B')) {
-        e.preventDefault()
-        e.stopPropagation()
-        state.selectedElementIds.forEach(id => {
-          const el = findElementInList(state.elements, id)
-          if (el && el.isComponent) { state.createInstance(id); state.pushHistory() }
-        })
-      }
-      // Ctrl+Alt+G = Frame Selection (Figma shortcut)
-      if (ctrl && e.altKey && (e.key === 'g' || e.key === 'G')) {
-        e.preventDefault()
-        if (state.selectedElementIds.length >= 1) {
-          const ids = state.selectedElementIds
-          const elementsToFrame = ids
-            .map(id => findElementInList(state.elements, id))
-            .filter(Boolean) as DesignElement[]
-          if (elementsToFrame.length > 0) {
-            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-            elementsToFrame.forEach(el => {
-              minX = Math.min(minX, el.x)
-              minY = Math.min(minY, el.y)
-              maxX = Math.max(maxX, el.x + el.width)
-              maxY = Math.max(maxY, el.y + el.height)
-            })
-            const frameId = generateId('frame')
-            // Convert children to relative coordinates (relative to frame's origin)
-            const relativeChildren = elementsToFrame.map(el => ({
-              ...el,
-              x: el.x - minX,
-              y: el.y - minY,
-            }))
-            const frame: DesignElement = {
-              id: frameId,
-              name: 'Frame',
-              type: 'frame',
-              x: minX, y: minY,
-              width: maxX - minX,
-              height: maxY - minY,
-              fill: 'transparent', stroke: 'transparent', strokeWidth: 0,
-              strokeStyle: 'solid', strokeAlign: 'center',
-              cornerRadius: 0, cornerRadiusTL: 0, cornerRadiusTR: 0, cornerRadiusBL: 0, cornerRadiusBR: 0,
-              opacity: 100, rotation: 0, visible: true, locked: false,
-              blendMode: 'normal', flipH: false, flipV: false, clipContent: true,
-              children: relativeChildren,
-            }
-            const remaining = state.elements.filter(el => !ids.includes(el.id))
-            state.loadElements([...remaining, frame])
-            state.setSelectedElementIds([frameId])
-            state.pushHistory()
-          }
-        }
-      }
-    }
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === ' ') setSpaceHeld(false)
-      if (e.key === 'Alt') setAltHeld(false)
-    }
-
-    const handleAuxClick = (e: MouseEvent) => {
-      // Prevent middle-click from opening links or triggering browser features
-      if (e.button === 1) e.preventDefault()
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('keyup', handleKeyUp)
-    window.addEventListener('auxclick', handleAuxClick)
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('keyup', handleKeyUp)
-      window.removeEventListener('auxclick', handleAuxClick)
-    }
-  }, [spaceHeld, fitToScreen, zoomToSelection, editingTextId, setSelectedElementIds, setActiveTool, activeTool, currentFrameId, exitFrame, penPoints, isPencilDrawing, pencilPoints, pushHistory, addElement, finishPenPath])
-
-  const getCursor = (): string => {
-    if (isPanning || spaceHeld) return 'grabbing'
-    if (isResizing && activeResizeHandle) return handleCursors[activeResizeHandle]
-    if (isDragging) return 'move'
-    switch (activeTool) {
-      case 'hand': return 'grab'
-      case 'move': return 'default'
-      case 'rectangle': case 'ellipse': case 'line': case 'frame': case 'polygon': case 'star': case 'pen': case 'pencil': case 'comment': case 'slice': case 'arrow': case 'image': return 'crosshair'
-      case 'text': return 'text'
-      case 'eyedropper': return 'crosshair'
-      default: return 'default'
-    }
-  }
 
   // Safe zoom value - never NaN or zero, used throughout SVG rendering
   const safeZoom = isFinite(zoom) && zoom > 0.001 ? zoom : 1
@@ -2837,6 +1211,113 @@ export function Canvas() {
     )
   })() : null
 
+  // PHASE 11 — Scale tool: 4 corner handles on the selection bbox (any selection size)
+  const scaleHandlesEl = activeTool === 'scale' && selectedElementIds.length > 0 ? (() => {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    const walk = (els: DesignElement[], px: number, py: number) => {
+      for (const el of els) {
+        if (selectedElementIds.includes(el.id)) {
+          minX = Math.min(minX, el.x + px)
+          minY = Math.min(minY, el.y + py)
+          maxX = Math.max(maxX, el.x + px + el.width)
+          maxY = Math.max(maxY, el.y + py + el.height)
+        }
+        if (el.children) walk(el.children, px + el.x, py + el.y)
+      }
+    }
+    walk(elements, 0, 0)
+    if (minX === Infinity) return null
+    const corners = [
+      [minX, minY], [maxX, minY], [minX, maxY], [maxX, maxY],
+    ] as const
+    const r = 5 / safeZoom
+    return (
+      <g pointerEvents="none">
+        <rect x={minX} y={minY} width={maxX - minX} height={maxY - minY} fill="none" stroke="#0D99FF" strokeWidth={1.5 / safeZoom} />
+        {corners.map(([cx, cy], i) => (
+          <rect key={i} x={cx - r} y={cy - r} width={r * 2} height={r * 2} fill="#FFFFFF" stroke="#0D99FF" strokeWidth={1.5 / safeZoom} />
+        ))}
+        {isScaling && (
+          <text x={minX} y={minY - 8 / safeZoom} fontSize={11 / safeZoom} fill="#0D99FF" fontFamily="Inter, system-ui" style={{ pointerEvents: 'none' }}>
+            scale
+          </text>
+        )}
+      </g>
+    )
+  })() : null
+
+  // PHASE 11 — alt+hover distance measurement overlay (pink, Figma-style)
+  const distanceMeasureEl = hoverDistances ? (() => {
+    const { selBox, hovBox, dx, dy, leftGap, rightGap, topGap, bottomGap } = hoverDistances
+    const stroke = '#FF3B8E'
+    const sw = 1.5 / safeZoom
+    const segs: React.ReactNode[] = []
+    const labels: React.ReactNode[] = []
+    const pill = (x: number, y: number, text: string, key: string) => {
+      const w = Math.max(text.length * 6.5, 16) / safeZoom
+      const h = 14 / safeZoom
+      labels.push(
+        <g key={key} style={{ pointerEvents: 'none' }}>
+          <rect x={x - w / 2} y={y - h / 2} width={w} height={h} rx={3 / safeZoom} fill={stroke} />
+          <text x={x} y={y + 3.5 / safeZoom} fontSize={9 / safeZoom} fill="#fff" textAnchor="middle" fontFamily="Inter, system-ui">{text}</text>
+        </g>
+      )
+    }
+    // horizontal gaps (elements vertically overlapping)
+    if (leftGap !== null) {
+      const y = (Math.max(selBox.y, hovBox.y) + Math.min(selBox.y + selBox.h, hovBox.y + hovBox.h)) / 2
+      const x1 = Math.min(selBox.x, hovBox.x + hovBox.w)
+      const x2 = Math.max(selBox.x, hovBox.x + hovBox.w)
+      segs.push(<line key="lg" x1={x1} y1={y} x2={x2} y2={y} stroke={stroke} strokeWidth={sw} />)
+      if (Math.abs(leftGap) > 0) pill((x1 + x2) / 2, y, `${leftGap}`, 'lgl')
+    }
+    if (rightGap !== null) {
+      const y = (Math.max(selBox.y, hovBox.y) + Math.min(selBox.y + selBox.h, hovBox.y + hovBox.h)) / 2
+      const x1 = Math.min(selBox.x + selBox.w, hovBox.x)
+      const x2 = Math.max(selBox.x + selBox.w, hovBox.x)
+      segs.push(<line key="rg" x1={x1} y1={y} x2={x2} y2={y} stroke={stroke} strokeWidth={sw} />)
+      if (Math.abs(rightGap) > 0) pill((x1 + x2) / 2, y, `${rightGap}`, 'rgl')
+    }
+    // vertical gaps (elements horizontally overlapping)
+    if (topGap !== null) {
+      const x = (Math.max(selBox.x, hovBox.x) + Math.min(selBox.x + selBox.w, hovBox.x + hovBox.w)) / 2
+      const y1 = Math.min(selBox.y, hovBox.y + hovBox.h)
+      const y2 = Math.max(selBox.y, hovBox.y + hovBox.h)
+      segs.push(<line key="tg" x1={x} y1={y1} x2={x} y2={y2} stroke={stroke} strokeWidth={sw} />)
+      if (Math.abs(topGap) > 0) pill(x, (y1 + y2) / 2, `${topGap}`, 'tgl')
+    }
+    if (bottomGap !== null) {
+      const x = (Math.max(selBox.x, hovBox.x) + Math.min(selBox.x + selBox.w, hovBox.x + hovBox.w)) / 2
+      const y1 = Math.min(selBox.y + selBox.h, hovBox.y)
+      const y2 = Math.max(selBox.y + selBox.h, hovBox.y)
+      segs.push(<line key="bg" x1={x} y1={y1} x2={x} y2={y2} stroke={stroke} strokeWidth={sw} />)
+      if (Math.abs(bottomGap) > 0) pill(x, (y1 + y2) / 2, `${bottomGap}`, 'bgl')
+    }
+    // diagonal gaps (no overlap on either axis)
+    if (dx !== null && dy !== null) {
+      // horizontal nearest-edge distance at the shared vertical band
+      const y = (Math.max(selBox.y, hovBox.y) + Math.min(selBox.y + selBox.h, hovBox.y + hovBox.h)) / 2
+      const x1 = hovBox.x < selBox.x ? hovBox.x + hovBox.w : selBox.x + selBox.w
+      const x2 = hovBox.x < selBox.x ? selBox.x : hovBox.x
+      segs.push(<line key="dx" x1={x1} y1={y} x2={x2} y2={y} stroke={stroke} strokeWidth={sw} />)
+      pill((x1 + x2) / 2, y, `${Math.round(x2 - x1)}`, 'dxl')
+    }
+    if (dx !== null && dy !== null) {
+      const x = (Math.max(selBox.x, hovBox.x) + Math.min(selBox.x + selBox.w, hovBox.x + hovBox.w)) / 2
+      const y1 = hovBox.y < selBox.y ? hovBox.y + hovBox.h : selBox.y + selBox.h
+      const y2 = hovBox.y < selBox.y ? selBox.y : hovBox.y
+      segs.push(<line key="dy" x1={x} y1={y1} x2={x} y2={y2} stroke={stroke} strokeWidth={sw} />)
+      pill(x, (y1 + y2) / 2, `${Math.round(y2 - y1)}`, 'dyl')
+    }
+    return (
+      <g style={{ pointerEvents: 'none' }}>
+        <rect x={hovBox.x} y={hovBox.y} width={hovBox.w} height={hovBox.h} fill="none" stroke={stroke} strokeWidth={sw} strokeDasharray={`${4 / safeZoom} ${3 / safeZoom}`} />
+        {segs}
+        {labels}
+      </g>
+    )
+  })() : null
+
   // Multi-select bounding box - blue dashed border like Figma
   const multiSelectBoxEl = selectedElementIds.length > 1 ? (() => {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
@@ -2955,34 +1436,20 @@ export function Canvas() {
     </g>
   ) : null
 
-  // Layout Grid overlay for selected frames (column grid like Figma)
-  const layoutGridEl = selectedElementIds.length === 1 ? (() => {
-    const id = selectedElementIds[0]
-    const el = findElementInList(elements, id)
-    if (!el || el.type !== 'frame') return null
-    // Show a 12-column grid overlay inside the frame (like Figma's layout grid)
-    const cols = 12
-    const gutter = 8
-    const margin = 16
-    const availW = el.width - margin * 2
-    const colW = (availW - (cols - 1) * gutter) / cols
-    if (colW <= 0) return null
-    return (
-      <g opacity={0.15}>
-        {Array.from({ length: cols }, (_, i) => (
-          <rect
-            key={`col-${i}`}
-            x={el.x + margin + i * (colW + gutter)}
-            y={el.y}
-            width={colW}
-            height={el.height}
-            fill="#FF3B30"
-            stroke="none"
-          />
-        ))}
-      </g>
-    )
-  })() : null
+  // PHASE 8 — per-frame layout grids (replaces the old hardcoded 12-col overlay)
+  const layoutGridEl = <FrameGrids />
+
+  // PHASE 8 — pixel grid: Figma shows it only at zoom >= 400%
+  const pixelGridEl = showPixelGrid && safeZoom >= 4 ? (
+    <g pointerEvents="none">
+      <defs>
+        <pattern id="pixelGrid" width={1} height={1} patternUnits="userSpaceOnUse">
+          <path d="M 1 0 L 0 0 0 1" fill="none" stroke="#3C3C3C" strokeWidth={1 / safeZoom} />
+        </pattern>
+      </defs>
+      <rect x={viewportBounds.minX} y={viewportBounds.minY} width={viewportBounds.maxX - viewportBounds.minX} height={viewportBounds.maxY - viewportBounds.minY} fill="url(#pixelGrid)" />
+    </g>
+  ) : null
 
   // Origin crosshair
   const originEl = (
@@ -3008,8 +1475,6 @@ export function Canvas() {
       />
     )
   })() : null
-
-  const gradientCounter = { value: 0 }
 
   return (
     <div className="relative w-full h-full overflow-hidden bg-[#1E1E1E] select-none" ref={containerRef} onMouseDown={(e) => { if (e.button === 1) e.preventDefault() }}>
@@ -3040,6 +1505,7 @@ export function Canvas() {
             <g transform={`translate(${centerX}, ${centerY}) scale(${safeZoom})`}>
               {svgDefs}
               {gridEl}
+              {pixelGridEl}
               {layoutGridEl}
               {originEl}
               {guidesEl}
@@ -3062,6 +1528,8 @@ export function Canvas() {
               {hoverHighlightEl}
               {measurementEl}
               {multiSelectBoxEl}
+              {scaleHandlesEl}
+              {distanceMeasureEl}
               {snapLinesEl}
               {dropHighlightEl}
               {rubberBand && isFinite(rubberBand.startX) && isFinite(rubberBand.endX) && isFinite(rubberBand.startY) && isFinite(rubberBand.endY) && (

@@ -25,7 +25,7 @@ export function InlineTextEditor({
   containerHeight,
   onClose,
 }: InlineTextEditorProps) {
-  const { elements, updateElement, pushHistory } = useEditorStore()
+  const { elements, updateElement, pushHistory, applyTextAutoSize } = useEditorStore()
   const editorRef = useRef<HTMLDivElement>(null)
   const hasPushedHistory = useRef(false)
 
@@ -59,38 +59,53 @@ export function InlineTextEditor({
     if (editorRef.current && element) {
       const newContent = editorRef.current.innerText || ''
       updateElement(elementId, { textContent: newContent })
+      // PHASE 10: re-run auto-size (hug/grow) after editing
+      applyTextAutoSize(elementId)
     }
     onClose()
-  }, [elementId, updateElement, onClose, element])
+  }, [elementId, updateElement, onClose, element, applyTextAutoSize])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
       e.preventDefault()
       if (editorRef.current && element) {
         updateElement(elementId, { textContent: editorRef.current.innerText })
+        applyTextAutoSize(elementId)
       }
       onClose()
     }
     e.stopPropagation()
-  }, [elementId, updateElement, onClose, element])
+  }, [elementId, updateElement, onClose, element, applyTextAutoSize])
 
   const handleInput = useCallback(() => {
     if (!hasPushedHistory.current) {
       pushHistory()
       hasPushedHistory.current = true
     }
-    // Auto-resize: measure text width and update element dimensions
+    // Auto-resize while typing: DOM measurement for immediate feedback,
+    // then the store's applyTextAutoSize reconciles exactly on commit.
     if (editorRef.current && element) {
-      const range = document.createRange()
-      range.selectNodeContents(editorRef.current)
-      const rect = range.getBoundingClientRect()
-      const editorRect = editorRef.current.getBoundingClientRect()
-      const contentWidth = rect.width / zoom
-      const contentHeight = editorRect.height / zoom
-      const newWidth = Math.max(element.width, contentWidth + 10)
-      const newHeight = Math.max(element.height, contentHeight + 4)
-      if (Math.abs(newWidth - element.width) > 2 || Math.abs(newHeight - element.height) > 2) {
-        updateElement(elementId, { width: Math.round(newWidth), height: Math.round(newHeight) })
+      const mode = element.textAutoResize || 'fixed'
+      if (mode === 'fixed') return
+      if (mode === 'hug') {
+        const range = document.createRange()
+        range.selectNodeContents(editorRef.current)
+        const rect = range.getBoundingClientRect()
+        const contentWidth = rect.width / zoom
+        const editorRect = editorRef.current.getBoundingClientRect()
+        const contentHeight = editorRect.height / zoom
+        const newWidth = Math.max(10, contentWidth + 2)
+        const newHeight = Math.max(10, contentHeight + 2)
+        if (Math.abs(newWidth - element.width) > 2 || Math.abs(newHeight - element.height) > 2) {
+          updateElement(elementId, { width: Math.round(newWidth), height: Math.round(newHeight) })
+        }
+      } else {
+        // grow: keep width, re-measure height
+        const editorRect = editorRef.current.getBoundingClientRect()
+        const contentHeight = editorRect.height / zoom
+        if (Math.abs(contentHeight - element.height) > 2) {
+          updateElement(elementId, { height: Math.round(contentHeight) })
+        }
       }
     }
   }, [pushHistory, element, elementId, updateElement, zoom])

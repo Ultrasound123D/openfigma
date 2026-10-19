@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getProject, saveProject } from '@/lib/server-state'
+import { publishProjectEvent, getRequestOrigin } from '@/lib/events/bus'
 
 // PUT /api/editor/projects/[id]/pages/[pageId]
 export async function PUT(
@@ -18,6 +19,13 @@ export async function PUT(
     project.activePageId = pageId
   }
   await saveProject(project)
+
+  // Live sync: page list / active page changed.
+  publishProjectEvent(projectId, {
+    type: 'pages-changed',
+    origin: getRequestOrigin(request),
+  })
+
   return NextResponse.json({ success: true })
 }
 
@@ -41,5 +49,12 @@ export async function DELETE(
     project.activePageId = project.pages[0].id
   }
   await saveProject(project)
+
+  // Live sync: page list changed (page removed).
+  publishProjectEvent(projectId, {
+    type: 'pages-changed',
+    origin: getRequestOrigin(request),
+  })
+
   return NextResponse.json({ success: true })
 }

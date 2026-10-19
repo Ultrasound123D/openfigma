@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getProject, saveProject, generateId } from '@/lib/server-state'
+import { publishProjectEvent, getRequestOrigin } from '@/lib/events/bus'
 
 // GET /api/editor/projects/[id]/pages
 export async function GET(
@@ -34,5 +35,12 @@ export async function POST(
 
   project.pages = [...project.pages, newPage]
   await saveProject(project)
+
+  // Live sync: page list changed (page added).
+  publishProjectEvent(projectId, {
+    type: 'pages-changed',
+    origin: getRequestOrigin(request),
+  })
+
   return NextResponse.json({ page: newPage })
 }

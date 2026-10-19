@@ -43,6 +43,7 @@ import {
   Pipette,
 } from 'lucide-react'
 import { useEditorStore } from '@/store/editor-store'
+import type { DesignElement } from '@/store/editor-store'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -54,18 +55,27 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
 } from '@/components/ui/dropdown-menu'
-import { exportAsPNG, exportAsSVG, exportAsPDF } from '@/lib/export'
+import { exportDesign, ExportFormat } from '@/lib/export'
+import { importFiles, pickFiles } from '@/lib/import/handlers'
+import { IMAGE_IMPORT_ACCEPT } from '@/lib/import/image-import'
 import { saveProject, loadProject, listProjects } from '@/lib/storage'
+import { pushProjectToServer } from '@/lib/server-project'
 import { createVidVerseDesign } from '@/data/demo-design'
+import { findElementInList } from '@/lib/element-utils'
+import { isBooleanOperandType } from '@/lib/boolean-ops'
+import { toast } from '@/hooks/use-toast'
 
 export function TopBar() {
   const { zoom, setZoom, setPan, toggleLeftSidebar, toggleRightSidebar, fileName, setFileName, undo, redo, pushHistory, lastSavedAt, isSaving, isDirty, setLastSavedAt, setSaving, setDirty, elements, pages, guides, loadElements, loadServerProject } = useEditorStore()
+  const currentProjectId = useEditorStore((s) => s.currentProjectId)
+  const syncStatus = useEditorStore((s) => s.syncStatus)
+  const lastRemoteOrigin = useEditorStore((s) => s.lastRemoteOrigin)
   const [isEditingName, setIsEditingName] = useState(false)
   const [showSaveIndicator, setShowSaveIndicator] = useState(false)
   const [serverProjects, setServerProjects] = useState<{ id: string; name: string }[]>([])
   const [loadingServer, setLoadingServer] = useState(false)
 
-  // Auto-save
+  // Auto-save (IndexedDB locally + server push when a server project is open)
   useEffect(() => {
     const interval = setInterval(async () => {
       const state = useEditorStore.getState()
@@ -80,10 +90,14 @@ export function TopBar() {
           fileName: state.fileName,
           guides: state.guides,
         })
+        // Live sync: push to the server so other tabs / MCP see our edits.
+        const serverAt = await pushProjectToServer(state)
         state.setLastSavedAt(savedAt)
         state.setDirty(false)
-        setShowSaveIndicator(true)
-        setTimeout(() => setShowSaveIndicator(false), 2000)
+        if (serverAt) {
+          setShowSaveIndicator(true)
+          setTimeout(() => setShowSaveIndicator(false), 2000)
+        }
       } catch (e) {
         console.error('Auto-save failed:', e)
       } finally {
@@ -104,6 +118,8 @@ export function TopBar() {
         fileName: state.fileName,
         guides: state.guides,
       })
+      // Live sync: push to the server so other tabs / MCP see our edits.
+      await pushProjectToServer(state)
       state.setLastSavedAt(savedAt)
       state.setDirty(false)
       setShowSaveIndicator(true)
@@ -152,17 +168,10 @@ export function TopBar() {
     }
   }, [])
 
-  const handleExportPNG = useCallback(async () => {
-    await exportAsPNG(elements, 2)
-  }, [elements])
-
-  const handleExportSVG = useCallback(async () => {
-    await exportAsSVG(elements)
-  }, [elements])
-
-  const handleExportPDF = useCallback(async () => {
-    await exportAsPDF()
-  }, [])
+  // PHASE 3: unified quick export (any of the 5 formats) at 2x default.
+  const handleExportFormat = useCallback(async (format: ExportFormat) => {
+    await exportDesign({ format, scale: 2, quality: 0.92, fileName })
+  }, [fileName])
 
   const formatSaveTime = (timestamp: number | null) => {
     if (!timestamp) return 'Not saved'
@@ -187,7 +196,7 @@ export function TopBar() {
             <button className="flex items-center h-6 px-2 rounded hover:bg-[#3C3C3C] text-[#CCCCCC] text-[11px] transition-colors duration-100">File</button>
           </DropdownMenuTrigger>
           <DropdownMenuContent className="bg-[#2C2C2C] border-[#3C3C3C] text-[#CCCCCC] min-w-[200px]">
-            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().setSelectedElementIds([])}>
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { const s = useEditorStore.getState(); s.setSelectedElementIds([]); s.closeServerProject() }}>
               <FileText className="w-4 h-4 mr-2" />New Design<DropdownMenuShortcut>⌘N</DropdownMenuShortcut>
             </DropdownMenuItem>
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={handleLoad}>
@@ -215,14 +224,23 @@ export function TopBar() {
               </DropdownMenuSubContent>
             </DropdownMenuSub>
             <DropdownMenuSeparator className="bg-[#3C3C3C]" />
-            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => {
-              const state = useEditorStore.getState()
-              state.pushHistory()
-              state.loadElements(createVidVerseDesign())
-              state.setFileName('VidVerse Mobile App')
-            }}>
-              <FolderOpen className="w-4 h-4 mr-2" />Import from Figma
-            </DropdownMenuItem>
+            {/* PHASE 4: real import menu — images / editable SVG / project JSON */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]">
+                <FolderOpen className="w-4 h-4 mr-2" />Import
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="bg-[#2C2C2C] border-[#3C3C3C] text-[#CCCCCC]">
+                <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => pickFiles(IMAGE_IMPORT_ACCEPT, true, (files) => void importFiles(files))}>
+                  Images… (PNG / JPG / WEBP / GIF)
+                </DropdownMenuItem>
+                <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => pickFiles('.svg,image/svg+xml', true, (files) => void importFiles(files))}>
+                  SVG… (editable shapes)
+                </DropdownMenuItem>
+                <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => pickFiles('application/json,.json', false, (files) => void importFiles(files))}>
+                  Project JSON… (replaces document)
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => {
               const state = useEditorStore.getState()
               state.pushHistory()
@@ -237,9 +255,11 @@ export function TopBar() {
                 <Download className="w-4 h-4 mr-2" />Export
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent className="bg-[#2C2C2C] border-[#3C3C3C] text-[#CCCCCC]">
-                <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={handleExportPNG}>Export as PNG</DropdownMenuItem>
-                <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={handleExportSVG}>Export as SVG</DropdownMenuItem>
-                <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={handleExportPDF}>Export as PDF</DropdownMenuItem>
+                <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleExportFormat('PNG')}>Export as PNG</DropdownMenuItem>
+                <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleExportFormat('JPG')}>Export as JPG</DropdownMenuItem>
+                <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleExportFormat('SVG')}>Export as SVG</DropdownMenuItem>
+                <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleExportFormat('PDF')}>Export as PDF</DropdownMenuItem>
+                <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleExportFormat('WEBP')}>Export as WEBP</DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
           </DropdownMenuContent>
@@ -291,6 +311,37 @@ export function TopBar() {
             </DropdownMenuItem>
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { const s = useEditorStore.getState(); if (s.selectedElementIds.length === 1) { s.pushHistory(); s.ungroupElements(s.selectedElementIds[0]) } }}>
               <Ungroup className="w-4 h-4 mr-2" />Ungroup<DropdownMenuShortcut>⌘⇧G</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            {/* PHASE 6: boolean operations + mask */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]">
+                <Square className="w-4 h-4 mr-2" />Boolean Operations
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="bg-[#2C2C2C] border-[#3C3C3C] text-[#CCCCCC] min-w-[180px]">
+                {(['union', 'subtract', 'intersect', 'exclude'] as const).map((op) => (
+                  <DropdownMenuItem key={op} className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => {
+                    const s = useEditorStore.getState()
+                    if (s.selectedElementIds.length < 2) {
+                      toast({ title: 'Boolean operation failed', description: 'Select at least 2 vector shapes (rectangle/ellipse/polygon/star/path)', variant: 'destructive' })
+                      return
+                    }
+                    s.pushHistory()
+                    const res = s.applyBooleanOperation(op)
+                    if (!res.ok) toast({ title: 'Boolean operation failed', description: res.reason, variant: 'destructive' })
+                  }}>
+                    {op === 'union' ? 'Union' : op === 'subtract' ? 'Subtract' : op === 'intersect' ? 'Intersect' : 'Exclude'}
+                    <DropdownMenuShortcut>⌥⌘{op === 'union' ? 'U' : op === 'subtract' ? 'S' : op === 'intersect' ? 'I' : 'E'}</DropdownMenuShortcut>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => {
+              const s = useEditorStore.getState()
+              if (s.selectedElementIds.length !== 1) return
+              const el = findElementInList(s.elements, s.selectedElementIds[0])
+              if (el && isBooleanOperandType(el)) { s.pushHistory(); s.setElementAsMask(el.id, !el.isMask) }
+            }}>
+              <Square className="w-4 h-4 mr-2" />Set as Mask / Unmask<DropdownMenuShortcut>⌃⌘M</DropdownMenuShortcut>
             </DropdownMenuItem>
             <DropdownMenuSeparator className="bg-[#3C3C3C]" />
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { const s = useEditorStore.getState(); s.pushHistory(); s.selectedElementIds.forEach(id => s.bringForward(id)) }}>
@@ -399,6 +450,37 @@ export function TopBar() {
           )}
         </div>
 
+        {/* Live-sync indicator (SSE) — only when a server project is open */}
+        {currentProjectId && (
+          <span
+            className="text-[9px] flex items-center gap-0.5"
+            title={
+              syncStatus === 'live'
+                ? `Live sync active — remote changes appear instantly${lastRemoteOrigin ? ` (last change by ${lastRemoteOrigin})` : ''}`
+                : syncStatus === 'connecting'
+                  ? 'Connecting live-sync stream…'
+                  : 'Live sync offline'
+            }
+          >
+            {syncStatus === 'live' ? (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-[#2ED573] animate-pulse" />
+                <span className="text-[#2ED573]">Live</span>
+              </>
+            ) : syncStatus === 'connecting' ? (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-[#FFB800] animate-pulse" />
+                <span className="text-[#FFB800]">Sync…</span>
+              </>
+            ) : (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-[#666]" />
+                <span className="text-[#666]">Offline</span>
+              </>
+            )}
+          </span>
+        )}
+
         {/* Save indicator */}
         <div className="flex items-center gap-1 ml-1">
           {isSaving ? (
@@ -438,7 +520,12 @@ export function TopBar() {
         <button className="flex items-center gap-1 bg-[#0D99FF] hover:bg-[#0B87E0] text-white text-[11px] font-medium px-2.5 py-1 rounded-md transition-colors duration-100">
           <Share2 className="w-3 h-3" />Share
         </button>
-        <button className="flex items-center justify-center w-6 h-6 rounded hover:bg-[#3C3C3C] text-[#888] hover:text-white transition-colors duration-100" title="Present">
+        <button
+          onClick={() => useEditorStore.getState().startPreview()}
+          className="flex items-center justify-center w-6 h-6 rounded hover:bg-[#3C3C3C] text-[#888] hover:text-white transition-colors duration-100"
+          title="Present prototype (▶)"
+          data-testid="present-button"
+        >
           <Play className="w-3.5 h-3.5" />
         </button>
 

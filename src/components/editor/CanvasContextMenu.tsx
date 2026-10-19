@@ -14,6 +14,8 @@ import {
 } from '@/components/ui/context-menu'
 import { useEditorStore } from '@/store/editor-store'
 import { findElementInList } from '@/lib/element-utils'
+import { isBooleanOperandType } from '@/lib/boolean-ops'
+import { toast } from '@/hooks/use-toast'
 
 interface CanvasContextMenuProps {
   children: React.ReactNode
@@ -41,6 +43,8 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
     copySelected,
     pasteClipboard,
     elements,
+    applyBooleanOperation,
+    setElementAsMask,
   } = useEditorStore()
 
   const selectedElement = selectedElementIds.length === 1
@@ -145,10 +149,39 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
           pushHistory()
         }
         break
+      // PHASE 6: boolean ops + mask
+      case 'boolean-union':
+      case 'boolean-subtract':
+      case 'boolean-intersect':
+      case 'boolean-exclude': {
+        const op = action.replace('boolean-', '') as 'union' | 'subtract' | 'intersect' | 'exclude'
+        pushHistory()
+        const res = applyBooleanOperation(op)
+        if (!res.ok) {
+          toast({ title: 'Boolean operation failed', description: res.reason, variant: 'destructive' })
+        }
+        break
+      }
+      case 'toggle-mask': {
+        if (selectedElement && isBooleanOperandType(selectedElement)) {
+          pushHistory()
+          setElementAsMask(selectedElement.id, !selectedElement.isMask)
+        }
+        break
+      }
     }
   }
 
   const hasSelection = selectedElementIds.length > 0
+  // PHASE 6 gating: boolean needs ≥2 vector shapes; mask needs 1 maskable shape
+  const booleanEligible = selectedElementIds
+    .map((id) => findElementInList(elements, id))
+    .filter((el): el is NonNullable<typeof el> => !!el && isBooleanOperandType(el))
+  const canBoolean = booleanEligible.length >= 2
+  const maskCandidate = selectedElement && !selectedElement.isMask && isBooleanOperandType(selectedElement)
+    ? selectedElement
+    : null
+  const unmaskCandidate = selectedElement?.isMask ? selectedElement : null
 
   return (
     <ContextMenu>
@@ -205,6 +238,45 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
                 <ContextMenuShortcut>⌘⇧G</ContextMenuShortcut>
               </ContextMenuItem>
             )}
+          </>
+        )}
+
+        {/* PHASE 6: Boolean operations + mask */}
+        {canBoolean && (
+          <>
+            <ContextMenuSeparator className="bg-[#3C3C3C]" />
+            <ContextMenuSub>
+              <ContextMenuSubTrigger className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]">
+                Boolean Operations
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="bg-[#2C2C2C] border-[#3C3C3C] text-[#CCC] min-w-[180px]">
+                <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('boolean-union')}>
+                  Union
+                  <ContextMenuShortcut>⌥⌘U</ContextMenuShortcut>
+                </ContextMenuItem>
+                <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('boolean-subtract')}>
+                  Subtract
+                  <ContextMenuShortcut>⌥⌘S</ContextMenuShortcut>
+                </ContextMenuItem>
+                <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('boolean-intersect')}>
+                  Intersect
+                  <ContextMenuShortcut>⌥⌘I</ContextMenuShortcut>
+                </ContextMenuItem>
+                <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('boolean-exclude')}>
+                  Exclude
+                  <ContextMenuShortcut>⌥⌘E</ContextMenuShortcut>
+                </ContextMenuItem>
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          </>
+        )}
+        {(maskCandidate || unmaskCandidate) && (
+          <>
+            <ContextMenuSeparator className="bg-[#3C3C3C]" />
+            <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('toggle-mask')}>
+              {unmaskCandidate ? 'Remove Mask' : 'Set as Mask'}
+              <ContextMenuShortcut>⌃⌘M</ContextMenuShortcut>
+            </ContextMenuItem>
           </>
         )}
 

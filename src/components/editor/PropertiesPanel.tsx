@@ -30,6 +30,92 @@ import { ColorPicker } from './ColorPicker'
 import { GradientEditor } from './GradientEditor'
 import { EffectsPanel } from './EffectsPanel'
 import { ExportPanel } from './ExportPanel'
+// PHASE 7 — style menu (four-dots) per slot
+import type { StyleSlot, StyleKind } from '@/lib/styles'
+// PHASE 8 — per-frame layout grid editor
+import { LayoutGridsPanel } from './LayoutGridsPanel'
+
+/** Figma-style four-dots style menu for a slot (fill/stroke/text/effect). */
+function StyleMenuButton({ elementId, slot, kind }: { elementId: string; slot: StyleSlot; kind: StyleKind }) {
+  const styles = useEditorStore((s) => s.styles)
+  const createStyleFromElement = useEditorStore((s) => s.createStyleFromElement)
+  const applyStyleToSelection = useEditorStore((s) => s.applyStyleToSelection)
+  const detachStyleFromSelection = useEditorStore((s) => s.detachStyleFromSelection)
+  const elements = useEditorStore((s) => s.elements)
+  const [open, setOpen] = useState(false)
+
+  const el = (() => {
+    const find = (els: DesignElement[]): DesignElement | null => {
+      for (const e of els) {
+        if (e.id === elementId) return e
+        if (e.children) { const f = find(e.children); if (f) return f }
+      }
+      return null
+    }
+    return find(elements)
+  })()
+  const attachedId = el ? (slot === 'fill' ? el.fillStyleId : slot === 'stroke' ? el.strokeStyleId : slot === 'text' ? el.textStyleId : el.effectStyleId) : undefined
+  const attached = styles.find((s) => s.id === attachedId)
+  const list = styles.filter((s) => s.kind === kind)
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center justify-center w-5 h-5 rounded hover:bg-[#3C3C3C] transition-colors"
+        title="Styles"
+      >
+        <svg width="10" height="10" viewBox="0 0 10 10" fill={attached ? '#0D99FF' : 'currentColor'} className="text-[#888]">
+          <circle cx="2" cy="2" r="1.15" /><circle cx="8" cy="2" r="1.15" />
+          <circle cx="5" cy="5" r="1.15" /><circle cx="2" cy="8" r="1.15" /><circle cx="8" cy="8" r="1.15" />
+        </svg>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-6 z-50 w-44 py-1 rounded-lg bg-[#2C2C2C] border border-[#3C3C3C] shadow-lg max-h-64 overflow-auto">
+            <button
+              className="w-full text-left px-2.5 py-1.5 text-[11px] text-[#DDD] hover:bg-[#0D99FF]/20 flex items-center gap-1.5"
+              onClick={() => {
+                createStyleFromElement(elementId, slot, `${kind === 'paint' ? 'Paint' : kind === 'text' ? 'Text' : 'Effect'} style ${styles.length + 1}`)
+                setOpen(false)
+              }}
+            >
+              <span className="text-[#0D99FF]">＋</span> Create style
+            </button>
+            {attached && (
+              <button
+                className="w-full text-left px-2.5 py-1.5 text-[11px] text-[#DDD] hover:bg-[#0D99FF]/20"
+                onClick={() => { detachStyleFromSelection(attached.id); setOpen(false) }}
+              >
+                Detach “{attached.name}”
+              </button>
+            )}
+            {list.length > 0 && <div className="h-px bg-[#3C3C3C] my-1" />}
+            {list.map((s) => (
+              <button
+                key={s.id}
+                className={`w-full text-left px-2.5 py-1.5 text-[11px] hover:bg-[#0D99FF]/20 flex items-center gap-1.5 ${s.id === attachedId ? 'text-[#0D99FF]' : 'text-[#DDD]'}`}
+                onClick={() => {
+                  // apply to selection via store (works for multi-select too)
+                  applyStyleToSelection(s.id)
+                  setOpen(false)
+                }}
+              >
+                <span className="w-3 h-3 rounded-[2px] border border-[#555] shrink-0" style={{
+                  background: s.kind === 'paint'
+                    ? (s.paint?.type === 'solid' ? s.paint.color : s.paint?.type === 'image' ? '#777' : `linear-gradient(135deg, ${(s.paint?.gradientStops || []).map((st) => st.color).join(', ')})`)
+                    : s.kind === 'text' ? (s.text?.textColor || '#FFF') : 'repeating-linear-gradient(45deg,#444,#444 2px,#888 2px,#888 4px)',
+                }} />
+                <span className="truncate">{s.name}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
 
 function PropertyInput({ label, value, onChange, onBlur, className = '' }: { label: string; value: number | string; onChange: (val: string) => void; onBlur?: () => void; className?: string }) {
   return (
@@ -97,7 +183,7 @@ const FRAME_PRESETS = [
 ]
 
 export function PropertiesPanel() {
-  const { elements, selectedElementIds, updateElement, alignElements, distributeElements, pushHistory, addFill, removeFill, updateFill, addStroke, removeStroke, updateStroke, setBlendMode, flipHorizontal, flipVertical, addComponent, detachInstance } = useEditorStore()
+  const { elements, selectedElementIds, updateElement, alignElements, distributeElements, pushHistory, addFill, removeFill, updateFill, addStroke, removeStroke, updateStroke, setBlendMode, flipHorizontal, flipVertical, addComponent, detachInstance, resizeFrameWithConstraints, applyTextAutoSize } = useEditorStore()
   const [aspectLocked, setAspectLocked] = useState(false)
   const [cornersLinked, setCornersLinked] = useState(true)
   const [showInspect, setShowInspect] = useState(false)
@@ -150,7 +236,15 @@ export function PropertiesPanel() {
         if (dim === 'width') updates.height = Math.round(num / ratio)
         else updates.width = Math.round(num * ratio)
       }
-      updateElement(element.id, updates)
+      // PHASE 9: frame resize via the numeric panel also applies constraints
+      if (element.type === 'frame' && element.children && element.children.length > 0 && !element.autoLayout) {
+        resizeFrameWithConstraints(element.id, {
+          width: updates.width ?? element.width,
+          height: updates.height ?? element.height,
+        })
+      } else {
+        updateElement(element.id, updates)
+      }
     }
   }
 
@@ -187,6 +281,8 @@ export function PropertiesPanel() {
 
   const handleTextChange = (field: string, value: string | number) => {
     updateElement(element.id, { [field]: value })
+    // PHASE 10: any text-affecting change re-runs auto-size (hug/grow)
+    applyTextAutoSize(element.id)
   }
 
   const handleAlign = (alignment: string) => {
@@ -375,6 +471,14 @@ export function PropertiesPanel() {
             </div>
           )}
 
+          {/* PHASE 8 — Layout grids (frames only) */}
+          {element.type === 'frame' && (
+            <div>
+              <SectionHeader title="Layout Grids" />
+              <LayoutGridsPanel element={element} />
+            </div>
+          )}
+
           {/* Alignment */}
           <div>
             <SectionHeader title="Alignment" />
@@ -449,6 +553,7 @@ export function PropertiesPanel() {
                 title="Fill"
                 action={
                   <div className="flex items-center gap-1">
+                    <StyleMenuButton elementId={element.id} slot="fill" kind="paint" />
                     <button
                       onClick={() => addFill(element.id, { type: 'solid', color: '#D9D9D9', opacity: 100 })}
                       className="flex items-center justify-center w-5 h-5 rounded hover:bg-[#3C3C3C] transition-colors"
@@ -480,13 +585,16 @@ export function PropertiesPanel() {
               <SectionHeader
                 title="Stroke"
                 action={
-                  <button
-                    onClick={() => addStroke(element.id, { color: '#000000', width: 1, style: 'solid', opacity: 100, align: 'center' })}
-                    className="flex items-center justify-center w-5 h-5 rounded hover:bg-[#3C3C3C] transition-colors"
-                    title="Add stroke"
-                  >
-                    <Plus className="w-3 h-3 text-[#888]" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <StyleMenuButton elementId={element.id} slot="stroke" kind="paint" />
+                    <button
+                      onClick={() => addStroke(element.id, { color: '#000000', width: 1, style: 'solid', opacity: 100, align: 'center' })}
+                      className="flex items-center justify-center w-5 h-5 rounded hover:bg-[#3C3C3C] transition-colors"
+                      title="Add stroke"
+                    >
+                      <Plus className="w-3 h-3 text-[#888]" />
+                    </button>
+                  </div>
                 }
               />
               <div className="flex items-center gap-2 p-1.5 rounded bg-[#1E1E1E] border border-[#383838] mb-1">
@@ -565,7 +673,7 @@ export function PropertiesPanel() {
           {/* Text Properties */}
           {isText && (
             <div>
-              <SectionHeader title="Text" />
+              <SectionHeader title="Text" action={<StyleMenuButton elementId={element.id} slot="text" kind="text" />} />
               <div className="space-y-2">
                 {/* Font family */}
                 <div className="flex items-center gap-2">
@@ -637,7 +745,7 @@ export function PropertiesPanel() {
                     </select>
                   </div>
                 </div>
-                {/* Style toggles: Bold, Italic, Underline */}
+                {/* Style toggles: Bold, Italic, Underline, Strikethrough (PHASE 10) */}
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] text-[#888] w-14 shrink-0">Style</span>
                   <div className="flex gap-0.5">
@@ -662,6 +770,44 @@ export function PropertiesPanel() {
                     >
                       <Underline className="w-3.5 h-3.5" />
                     </button>
+                    {/* PHASE 10 — strikethrough */}
+                    <button
+                      onClick={() => { pushHistory(); handleTextChange('textDecoration', element.textDecoration === 'strikethrough' ? 'none' : 'strikethrough') }}
+                      className={`flex items-center justify-center h-6 w-7 rounded transition-colors font-semibold text-[13px] ${element.textDecoration === 'strikethrough' ? 'bg-[#0D99FF] text-white' : 'bg-[#1E1E1E] text-[#888] hover:bg-[#3C3C3C]'}`}
+                      title="Strikethrough"
+                    >
+                      <span style={{ textDecoration: 'line-through' }}>S</span>
+                    </button>
+                  </div>
+                </div>
+                {/* PHASE 10 — auto-resize + case */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] text-[#888] w-8 shrink-0" title="Auto resize">Auto</span>
+                    <select
+                      value={element.textAutoResize || 'fixed'}
+                      onChange={(e) => { pushHistory(); updateElement(element.id, { textAutoResize: e.target.value as 'fixed' | 'hug' | 'grow' }); applyTextAutoSize(element.id) }}
+                      className="w-full h-6 px-1 text-[11px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF]"
+                      title="Text auto resize — Fixed / Hug contents / Grow with wrapping"
+                    >
+                      <option value="fixed">Fixed</option>
+                      <option value="hug">Hug</option>
+                      <option value="grow">Grow</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] text-[#888] w-8 shrink-0">Case</span>
+                    <select
+                      value={element.textCase || 'original'}
+                      onChange={(e) => { pushHistory(); updateElement(element.id, { textCase: e.target.value as 'original' | 'upper' | 'lower' | 'title' }) }}
+                      className="w-full h-6 px-1 text-[11px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF]"
+                      title="Letter case"
+                    >
+                      <option value="original">Aa</option>
+                      <option value="upper">AA</option>
+                      <option value="lower">aa</option>
+                      <option value="title">Ab Cd</option>
+                    </select>
                   </div>
                 </div>
                 {/* Text alignment with icons */}
@@ -814,36 +960,90 @@ export function PropertiesPanel() {
             </div>
           )}
 
-          {/* Constraints */}
+          {/* Constraints (PHASE 9 — Figma-style 9-box picker + dropdowns).
+              Only meaningful for children of a frame/group. */}
+          {(() => {
+            const hasParentFrame = (() => {
+              const search = (els: DesignElement[]): boolean =>
+                els.some((e) =>
+                  (e.type === 'frame' || e.type === 'group') &&
+                  (e.children?.some((c) => c.id === element.id) || (e.children ? search(e.children) : false))
+                )
+              return search(elements)
+            })()
+            if (!hasParentFrame) return null
+            return (
           <div>
             <SectionHeader title="Constraints" />
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-[#888] w-14 shrink-0">H</span>
-              <select
-                value={element.constraints?.horizontal || 'left'}
-                onChange={(e) => updateElement(element.id, { constraints: { ...element.constraints, horizontal: e.target.value } as any })}
-                className="flex-1 h-6 px-1 text-[11px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF]"
-              >
-                <option value="left">Left</option><option value="right">Right</option><option value="center">Center</option><option value="scale">Scale</option><option value="left-right">Left & Right</option>
-              </select>
-            </div>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-[10px] text-[#888] w-14 shrink-0">V</span>
-              <select
-                value={element.constraints?.vertical || 'top'}
-                onChange={(e) => updateElement(element.id, { constraints: { ...element.constraints, vertical: e.target.value } as any })}
-                className="flex-1 h-6 px-1 text-[11px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF]"
-              >
-                <option value="top">Top</option><option value="bottom">Bottom</option><option value="center">Center</option><option value="scale">Scale</option><option value="top-bottom">Top & Bottom</option>
-              </select>
+            <div className="flex items-start gap-3">
+              {/* Visual 9-box picker: columns = horizontal, rows = vertical */}
+              <div className="grid grid-cols-3 gap-[2px] p-1 rounded bg-[#1E1E1E] border border-[#383838] shrink-0" data-testid="constraints-9box">
+                {([
+                  { h: 'left', v: 'top' }, { h: 'center', v: 'top' }, { h: 'right', v: 'top' },
+                  { h: 'left', v: 'center' }, { h: 'center', v: 'center' }, { h: 'right', v: 'center' },
+                  { h: 'left', v: 'bottom' }, { h: 'center', v: 'bottom' }, { h: 'right', v: 'bottom' },
+                ] as const).map(({ h, v }) => {
+                  const active = (element.constraints?.horizontal || 'left') === h &&
+                                 (element.constraints?.vertical || 'top') === v
+                  const edgeH = h === 'left' || h === 'right'
+                  const edgeV = v === 'top' || v === 'bottom'
+                  // draw Figma's pin glyphs: lines for pinned edges, dot for center
+                  return (
+                    <button
+                      key={`${h}-${v}`}
+                      className={`w-4.5 h-4.5 w-[18px] h-[18px] rounded-[2px] flex items-center justify-center transition-colors ${active ? 'bg-[#0D99FF]/25' : 'hover:bg-[#2C2C2C]'}`}
+                      style={{ width: 18, height: 18 }}
+                      title={`Horizontal: ${h}, Vertical: ${v}`}
+                      onClick={() => updateElement(element.id, {
+                        constraints: { horizontal: h, vertical: v },
+                        constraintsEdited: true,
+                      } as any)}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 12 12">
+                        {/* horizontal pin */}
+                        {h === 'left' && <line x1="1" y1="6" x2="5" y2="6" stroke={active ? '#0D99FF' : '#777'} strokeWidth="1.2" />}
+                        {h === 'center' && <circle cx="6" cy="6" r="1.6" fill={active ? '#0D99FF' : '#777'} />}
+                        {h === 'right' && <line x1="7" y1="6" x2="11" y2="6" stroke={active ? '#0D99FF' : '#777'} strokeWidth="1.2" />}
+                        {/* vertical pin */}
+                        {v === 'top' && <line x1="6" y1="1" x2="6" y2="5" stroke={active ? '#0D99FF' : '#777'} strokeWidth="1.2" />}
+                        {v === 'center' && h !== 'center' && <circle cx="6" cy="6" r="1.6" fill={active ? '#0D99FF' : '#777'} />}
+                        {v === 'bottom' && <line x1="6" y1="7" x2="6" y2="11" stroke={active ? '#0D99FF' : '#777'} strokeWidth="1.2" />}
+                        {edgeH && edgeV && <circle cx={h === 'left' ? 1.5 : 10.5} cy={v === 'top' ? 1.5 : 10.5} r="1.1" fill={active ? '#0D99FF' : '#777'} />}
+                      </svg>
+                    </button>
+                  )
+                })}
+              </div>
+              {/* Dropdowns for the two-axis + stretch modes the 9-box can't express */}
+              <div className="flex-1 min-w-0 space-y-1">
+                <select
+                  value={element.constraints?.horizontal || 'left'}
+                  onChange={(e) => updateElement(element.id, { constraints: { ...element.constraints, horizontal: e.target.value }, constraintsEdited: true } as any)}
+                  className="w-full h-6 px-1 text-[11px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF]"
+                >
+                  <option value="left">Left</option><option value="right">Right</option><option value="center">Center</option><option value="left-right">Left &amp; Right</option>
+                </select>
+                <select
+                  value={element.constraints?.vertical || 'top'}
+                  onChange={(e) => updateElement(element.id, { constraints: { ...element.constraints, vertical: e.target.value }, constraintsEdited: true } as any)}
+                  className="w-full h-6 px-1 text-[11px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF]"
+                >
+                  <option value="top">Top</option><option value="bottom">Bottom</option><option value="center">Center</option><option value="top-bottom">Top &amp; Bottom</option>
+                </select>
+                <div className="text-[9px] text-[#666] leading-3">
+                  {element.constraintsEdited ? 'Manual' : 'Auto-inferred from position'}
+                </div>
+              </div>
             </div>
           </div>
+            )
+          })()}
 
           <SectionDivider />
 
           {/* Effects */}
           <div>
-            <SectionHeader title="Effects" />
+            <SectionHeader title="Effects" action={<StyleMenuButton elementId={element.id} slot="effect" kind="effect" />} />
             <EffectsPanel element={element} />
           </div>
 
@@ -902,6 +1102,46 @@ function FillLayerItem({ elementId, fill, index }: { elementId: string; fill: Fi
             stops={fill.gradientStops}
             onChange={(angle, stops) => updateFill(elementId, index, { gradientAngle: angle, gradientStops: stops })}
           />
+        </div>
+      )}
+      {/* PHASE 10 — image fill modes: Fill (cover) / Fit (contain) / Crop (manual) */}
+      {fill.type === 'image' && fill.imageUrl && (
+        <div className="mt-1.5 flex items-center gap-1">
+          <select
+            value={fill.scaleMode || 'fill'}
+            onChange={(e) => updateFill(elementId, index, { scaleMode: e.target.value as 'fill' | 'fit' | 'crop' })}
+            className="flex-1 h-5 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF]"
+            title="Image fill mode"
+          >
+            <option value="fill">Fill</option>
+            <option value="fit">Fit</option>
+            <option value="crop">Crop</option>
+          </select>
+          {(fill.scaleMode || 'fill') === 'crop' && (
+            <div className="flex items-center gap-1">
+              <input
+                type="number" step={0.1} min={0.1}
+                value={fill.scale ?? 1}
+                onChange={(e) => { const n = parseFloat(e.target.value); if (!isNaN(n) && n > 0) updateFill(elementId, index, { scale: n }) }}
+                className="w-11 h-5 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] text-center focus:outline-none focus:border-[#0D99FF] tabular-nums"
+                title="Crop scale"
+              />
+              <input
+                type="number" step={1}
+                value={fill.offsetX || 0}
+                onChange={(e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) updateFill(elementId, index, { offsetX: n }) }}
+                className="w-11 h-5 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] text-center focus:outline-none focus:border-[#0D99FF] tabular-nums"
+                title="Crop offset X"
+              />
+              <input
+                type="number" step={1}
+                value={fill.offsetY || 0}
+                onChange={(e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) updateFill(elementId, index, { offsetY: n }) }}
+                className="w-11 h-5 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] text-center focus:outline-none focus:border-[#0D99FF] tabular-nums"
+                title="Crop offset Y"
+              />
+            </div>
+          )}
         </div>
       )}
     </div>

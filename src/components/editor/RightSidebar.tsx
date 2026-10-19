@@ -5,13 +5,11 @@ import { useEditorStore } from '@/store/editor-store'
 import { findElementInList } from '@/lib/element-utils'
 import { PropertiesPanel } from './PropertiesPanel'
 import { ComponentPanel } from './ComponentPanel'
-import { Plus, ArrowRight, MousePointer2, Zap, Copy, Check, ChevronDown, ChevronRight } from 'lucide-react'
+import { InteractionsPanel } from './prototype/InteractionsPanel'
+import { MousePointer2, Zap, Copy, Check, ChevronDown, ChevronRight } from 'lucide-react'
 
 export function RightSidebar() {
   const { rightTab, setRightTab, elements, selectedElementIds, addComponent, createInstance, pushHistory } = useEditorStore()
-  const [interactionTrigger, setInteractionTrigger] = useState<'click' | 'hover' | 'drag'>('click')
-  const [interactionTarget, setInteractionTarget] = useState<string>('')
-
   const selectedElement = selectedElementIds.length === 1
     ? findElementInList(elements, selectedElementIds[0])
     : null
@@ -56,88 +54,11 @@ export function RightSidebar() {
         </div>
       )}
 
-      {/* Prototype Tab */}
+      {/* Prototype Tab — real interactions editor (PHASE 2) */}
       {rightTab === 'prototype' && (
         <div className="flex-1 overflow-y-auto custom-scrollbar p-2">
           {selectedElement ? (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-semibold text-white uppercase tracking-wider">Interactions</span>
-                <button className="flex items-center justify-center w-5 h-5 rounded bg-[#0D99FF] text-white hover:bg-[#0B87E0] transition-colors duration-100">
-                  <Plus className="w-3 h-3" />
-                </button>
-              </div>
-
-              {/* Trigger selection */}
-              <div>
-                <span className="text-[10px] text-[#888] mb-0.5 block">Trigger</span>
-                <select
-                  value={interactionTrigger}
-                  onChange={(e) => setInteractionTrigger(e.target.value as any)}
-                  className="w-full h-6 px-1.5 text-[11px] border border-[#383838] rounded bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF]"
-                >
-                  <option value="click">On Click</option>
-                  <option value="hover">On Hover</option>
-                  <option value="drag">On Drag</option>
-                </select>
-              </div>
-
-              {/* Action */}
-              <div>
-                <span className="text-[10px] text-[#888] mb-1 block">Action</span>
-                <div className="flex items-center gap-1.5 p-1.5 rounded bg-[#1E1E1E] border border-[#383838]">
-                  <ArrowRight className="w-3 h-3 text-[#0D99FF]" />
-                  <span className="text-[11px] text-[#CCC]">Navigate to</span>
-                </div>
-              </div>
-
-              {/* Target frame */}
-              <div>
-                <span className="text-[10px] text-[#888] mb-0.5 block">Destination</span>
-                <select
-                  value={interactionTarget}
-                  onChange={(e) => setInteractionTarget(e.target.value)}
-                  className="w-full h-6 px-1.5 text-[11px] border border-[#383838] rounded bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF]"
-                >
-                  <option value="">Select frame...</option>
-                  {frames.map(frame => (
-                    <option key={frame.id} value={frame.id}>{frame.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Animation */}
-              <div>
-                <span className="text-[10px] text-[#888] mb-0.5 block">Animation</span>
-                <select className="w-full h-6 px-1.5 text-[11px] border border-[#383838] rounded bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF]">
-                  <option value="instant">Instant</option>
-                  <option value="dissolve">Dissolve</option>
-                  <option value="smart-animate">Smart Animate</option>
-                  <option value="move-in">Move In</option>
-                  <option value="move-out">Move Out</option>
-                  <option value="push">Push</option>
-                  <option value="slide-in">Slide In</option>
-                </select>
-              </div>
-
-              {/* Duration */}
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] text-[#888] w-14 shrink-0">Duration</span>
-                <input type="text" defaultValue="300" className="w-14 h-6 px-1 text-[11px] border border-[#383838] rounded bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF] tabular-nums" />
-                <span className="text-[9px] text-[#888]">ms</span>
-              </div>
-
-              {/* Easing */}
-              <div>
-                <span className="text-[10px] text-[#888] mb-0.5 block">Easing</span>
-                <select className="w-full h-6 px-1.5 text-[11px] border border-[#383838] rounded bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF]">
-                  <option value="ease">Ease In Out</option>
-                  <option value="ease-in">Ease In</option>
-                  <option value="ease-out">Ease Out</option>
-                  <option value="linear">Linear</option>
-                </select>
-              </div>
-            </div>
+            <InteractionsPanel element={selectedElement} />
           ) : (
             <div className="flex-1 flex items-center justify-center p-4">
               <div className="text-center">

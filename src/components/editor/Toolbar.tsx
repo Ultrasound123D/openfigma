@@ -21,8 +21,11 @@ import {
   Image,
   Move,
   MoreHorizontal,
+  Scaling,
 } from 'lucide-react'
 import { useEditorStore, ToolType } from '@/store/editor-store'
+// PHASE 8 — view options popup
+import { ViewOptionsPopup } from './ViewOptionsPopup'
 
 interface ToolDef {
   type: ToolType
@@ -85,6 +88,7 @@ const toolGroups: ToolGroup[] = [
       { type: 'eyedropper', icon: Pipette, label: 'Eyedropper', shortcut: 'I' },
     ],
     moreTools: [
+      { type: 'scale', icon: Scaling, label: 'Scale', shortcut: 'K' },
       { type: 'comment', icon: MessageCircle, label: 'Comment', shortcut: 'C' },
       { type: 'slice', icon: Scissors, label: 'Slice', shortcut: 'S' },
     ],
@@ -148,6 +152,8 @@ const toolOptions: Partial<Record<ToolType, { label: string; options: { id: stri
 
 export function Toolbar() {
   const { activeTool, setActiveTool, editorMode, setEditorMode, zoom, setZoom, setPan } = useEditorStore()
+  // PHASE 8 — view options popup
+  const [viewOptionsOpen, setViewOptionsOpen] = useState(false)
   const [openMenuIdx, setOpenMenuIdx] = useState<number | null>(null)
   const [toolOptionsMenuOpen, setToolOptionsMenuOpen] = useState(false)
   const [penBezierEnabled, setPenBezierEnabled] = useState(true)
@@ -250,7 +256,7 @@ export function Toolbar() {
         </div>
       )}
 
-      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-[100] flex items-center rounded-lg bg-[#2C2C2C] border border-[#383838] overflow-visible" ref={menuRef}>
+      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-[100] flex items-center rounded-[13px] bg-fig-surface border border-fig-border overflow-visible" style={{ boxShadow: 'var(--fig-shadow-400)' }} ref={menuRef}>
         {/* Tool groups */}
         {toolGroups.map((group, groupIdx) => (
           <React.Fragment key={groupIdx}>
@@ -264,12 +270,13 @@ export function Toolbar() {
                     key={tool.type}
                     onClick={() => setActiveTool(tool.type)}
                     className={`
-                      flex items-center justify-center w-7 h-7 rounded-md transition-colors duration-100
-                      ${isActive ? 'bg-[#0D99FF] text-white' : 'text-[#AAA] hover:bg-[#3C3C3C] hover:text-white'}
+                      flex items-center justify-center rounded-md transition-colors duration-100
+                      ${isActive ? 'bg-fig-surface-active text-white' : 'text-fig-text-tertiary hover:bg-fig-surface-hover hover:text-white'}
                     `}
+                    style={{ width: 'var(--fig-toolbar-btn)', height: 'var(--fig-toolbar-btn)' }}
                     title={tool.shortcut ? `${tool.label} (${tool.shortcut})` : tool.label}
                   >
-                    <Icon className="w-[14px] h-[14px]" />
+                    <Icon className="w-4 h-4" />
                   </button>
                 )
               })}
@@ -280,9 +287,10 @@ export function Toolbar() {
                   <button
                     onClick={() => setOpenMenuIdx(openMenuIdx === groupIdx ? null : groupIdx)}
                     className={`
-                      flex items-center justify-center w-5 h-7 rounded-md transition-colors duration-100
-                      ${openMenuIdx === groupIdx ? 'bg-[#3C3C3C] text-white' : isGroupActive(group) ? 'text-[#0D99FF] hover:bg-[#3C3C3C]' : 'text-[#666] hover:bg-[#3C3C3C] hover:text-white'}
+                      flex items-center justify-center w-5 rounded-md transition-colors duration-100
+                      ${openMenuIdx === groupIdx ? 'bg-fig-surface-hover text-white' : isGroupActive(group) ? 'text-fig-accent hover:bg-fig-surface-hover' : 'text-fig-text-disabled hover:bg-fig-surface-hover hover:text-white'}
                     `}
+                    style={{ height: 'var(--fig-toolbar-btn)' }}
                     title={`${group.label} options`}
                   >
                     <ChevronDown className="w-2.5 h-2.5" />
@@ -326,27 +334,48 @@ export function Toolbar() {
         <div className="flex items-center px-[1px] py-[2px] gap-[1px]">
           <button
             onClick={() => setZoom(Math.max(0.01, zoom - 0.1))}
-            className="flex items-center justify-center w-6 h-7 rounded-md text-[#AAA] hover:bg-[#3C3C3C] hover:text-white transition-colors duration-100"
+            className="flex items-center justify-center w-6 rounded-md text-fig-text-tertiary hover:bg-fig-surface-hover hover:text-white transition-colors duration-100"
+            style={{ height: 'var(--fig-toolbar-btn)' }}
             title="Zoom out"
           >
             <Minus className="w-2.5 h-2.5" />
           </button>
           <button
             onClick={() => { setZoom(1); setPan(0, 0) }}
-            className="flex items-center justify-center h-7 px-0.5 rounded-md text-[10px] text-[#AAA] hover:bg-[#3C3C3C] hover:text-white transition-colors duration-100 tabular-nums min-w-[34px]"
+            className="flex items-center justify-center rounded-md text-[10px] text-fig-text-tertiary hover:bg-fig-surface-hover hover:text-white transition-colors duration-100 tabular-nums min-w-[34px]"
+            style={{ height: 'var(--fig-toolbar-btn)', fontFamily: 'var(--fig-font-family-mono)' }}
             title="Reset zoom to 100%"
           >
             {Math.round(zoom * 100)}%
           </button>
           <button
             onClick={() => setZoom(Math.min(64, zoom + 0.1))}
-            className="flex items-center justify-center w-6 h-7 rounded-md text-[#AAA] hover:bg-[#3C3C3C] hover:text-white transition-colors duration-100"
+            className="flex items-center justify-center w-6 rounded-md text-fig-text-tertiary hover:bg-fig-surface-hover hover:text-white transition-colors duration-100"
+            style={{ height: 'var(--fig-toolbar-btn)' }}
             title="Zoom in"
           >
             <svg className="w-2.5 h-2.5" viewBox="0 0 12 12" fill="none">
               <path d="M6 1v10M1 6h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
             </svg>
           </button>
+        </div>
+
+        {/* PHASE 8 — View options (grids / snapping / rulers / units) */}
+        <div className="relative">
+          <button
+            onClick={() => setViewOptionsOpen(!viewOptionsOpen)}
+            className={`flex items-center justify-center w-6 rounded-md transition-colors duration-100 ${viewOptionsOpen ? 'bg-fig-surface-hover text-white' : 'text-fig-text-tertiary hover:bg-fig-surface-hover hover:text-white'}`}
+            style={{ height: 'var(--fig-toolbar-btn)' }}
+            title="View options"
+          >
+            <svg className="w-3 h-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2">
+              <path d="M1.5 3.5h9M1.5 6h9M1.5 8.5h9" />
+              <circle cx="4" cy="3.5" r="1" fill="currentColor" stroke="none" />
+              <circle cx="8" cy="6" r="1" fill="currentColor" stroke="none" />
+              <circle cx="5.5" cy="8.5" r="1" fill="currentColor" stroke="none" />
+            </svg>
+          </button>
+          {viewOptionsOpen && <ViewOptionsPopup onClose={() => setViewOptionsOpen(false)} />}
         </div>
 
         {/* Divider before mode switch */}

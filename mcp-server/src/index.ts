@@ -8,7 +8,12 @@ const API_BASE = process.env.EDITOR_API_URL || 'http://localhost:3000';
 async function api(method: string, path: string, body?: any) {
   const res = await fetch(`${API_BASE}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      // Identifies MCP as the actor so live-sync (SSE) events are tagged
+      // with origin "mcp-server" and browser tabs can show AI-driven changes.
+      'X-Client-Id': 'mcp-server',
+    },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   return res.json();
