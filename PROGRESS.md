@@ -15,8 +15,9 @@
 | PHASE 9 | القيود: سلوك إعادة تموضع/تحجيم الأبناء عند تحجيم الإطار + استنتاج تلقائي + منتقي 9 مربعات | ✅ |
 | PHASE 10 | عمق النص: textAutoResize (fixed/hug/grow بقياس canvas حقيقي) + textCase + شطب + أنماط تعبئة الصورة fill/fit/crop | ✅ |
 | PHASE 11 | أدوات الدقة + الختام: Scale tool (K) + Deep select (⌘نقرة) + قياس المسافات (alt+تحويم) + حزمة تسليم | ✅ |
+| PHASE 12 | Auto Layout كامل: WRAP + أحجام FIXED/HUG/FILL (إطار+أبناء) + min/max + محاذاة counter منفصلة + baseline + أبناء absolute + reorder-on-drop + لوحة UI بتعادل Figma | ✅ |
 
-> **المراحل 0 ← 11 كلها مغلقة.** المنفذ الكامل جاهز.
+> **المراحل 0 ← 12 مغلقة.** خطة النقل الكامل: PORT-PLAN-12-16.md (12✅ ← 16).
 
 ## سجل التحقق
 - Baseline (قبل PHASE 1): tsc ✅ / lint ✅ / build ✅
@@ -46,3 +47,13 @@
 - **PHASE 9 (القيود)**: `lib/constraints.ts` (inferConstraints من موضع الإنشاء + constrainChild/constrainChildren بفضاء إحداثيات الأب) — إجراء resizeFrameWithConstraints يُستدعى من مقابض التحجيم (RAF) واللوحة الرقمية — الاستنتاج التلقائي عند الإنشاء/الإسقاط داخل إطار (addElement + moveElementToFrame) مع علامة constraintsEdited تحمي التعديل اليدوي — منتقي 9 مربعات بصري + قوائم Left/Right/Center/Left&Right و Top/Bottom/Center/Top&Bottom — القسم يظهر فقط لأبناء إطار/مجموعة
 - **PHASE 10 (عمق النص والطلاء)**: `lib/text-measure.ts` (قياس canvas 2D حقيقي بـctx.measureText + wrapText جشّاء + applyTextCase) — textAutoResize: fixed/hug (تغليف عرض)/grow (التفاف على العرض) مفعّل عند الإنشاء الافتراضي grow + عند التحرير (InlineTextEditor) + عند تغيير خصائص الخط — textCase original/upper/lower/title — شطب يدوي بخط SVG (دعم line-through متقلب) — أنماط صورة fill(cover)/fit(contain)/crop(مقياس+إزاحة يدوية) في generateSVGDefs + واجهة في FillLayerItem
 - **PHASE 11 (أدوات الدقة + الختام)**: `lib/scale-element.ts` (تحجيم متسق لكل شيء: هندسة/حواف/خط/مسارات متجهية/تأثيرات/حشوات auto-layout + أبناء تكرارياً) — أداة Scale (K) في قائمة المزيد بالشريط: مقابض زوايا bbox أي كان عدد المحدد، مرساة الزاوية المقابلة، Shift=خطوات 0.1، لقطة أصلية بلا انجراف — Deep select (⌘نقرة) عبر findElementAtPosition(deep) لأعمق عنصر — قياس المسافات (alt+تحويم): فجوات أفقية عند تراكب عمودي والعكس + فجوات قطرية، خطوط وردية بوسوم بكسل
+
+## PHASE 12 — تفصيل التنفيذ والتحقق (2026-10-20)
+- **المحرك** `lib/auto-layout.ts` أعيد بناؤه بالكامل: `computeAutoLayout` يرجع children + حجم الإطار النهائي. يدعم: wrap متعدد الأسطر (counterAxisGap + counterAxisAlignContent)، أحجام الإطار primaryAxisSizing/counterAxisSizing (fixed/hug/fill)، أحجام الأبناء layoutSizingH/V (fixed/hug/fill — fill موزّع بالتساوي على المحور الرئيسي، hug للنص عبر قياس canvas حقيقي وللإطارات المتداخلة تكرارياً)، محاذاة baseline للنص، أبناء absolute خارج التدفق، قيود minWidth/maxWidth/minHeight/maxHeight على الإطار والأبناء، وتوافق legacy مع alignItems=stretch.
+- **النموذج** store: AutoLayout + wrap/counterAxisGap/counterAxisAlignContent/primaryAxisSizing/counterAxisSizing + DesignElement + layoutSizingH/layoutSizingV/layoutPositioning/min-max. إجراءات جديدة: syncAutoLayoutTree/syncAutoLayoutFrame/reorderChild. updateElement يدمج المحرك (applyAutoLayoutSync على سلسلة الأسلاف) ويحوّل hug→fixed عند التحجيم اليدوي (بلا كبس للقادم الجديد). إضافات على addElement/delete/deleteSelected/moveElementToFrame/reorderElement (reorder يعمل الآن للأبناء أيضاً).
+- **التفاعل**: reorder-on-drop داخل إطارات auto layout (مؤشر الإسقاط يحدد الفهرسة على محور التخطيط) في use-element-interactions.
+- **الواجهة**: لوحة Auto Layout بتعادل Figma (اتجاه أسهم + wrap + محاذاة محورين أيقونات + gap + حشوات + صفوف Size: W/H fixed/hug/fill) + قسم Layout Sizing للأبناء (W/H selects + زر absolute + min/max) في PropertiesPanel.
+- **النقل**: whitelist PUT بكل الحقول الجديدة (round-trip مؤكد مع حجب evilField) + normalizeServerElement يمررها (spread).
+- **التحقق**: tsc صفر / eslint صفر / next build ناجح. حي بالمتصفح عبر خطاف اختبار window.__openfigma: hug×hug (96×108 مطابقة تامة)، fill عرضي (80=96-16 ثم 184=200-16)، wrap بفجوة صفوف (H=102، سطران، نص hug مقاس 50px)، min/max (150→180)، reorder (B للأمام)، absolute (خارج التدفق بموضع يدوي). VLM أكّد: إطار ملتف على المحتوى + سطرا wrap مرئيان + لوحة AL كاملة. لقطات: download/openfigma-p12-{hug,fill,wrap,child-sizing,absolute}.png
+- **إصلاح أثناء التحقق**: خلل كبس autoLayout في updateElement (كان يستبدل القادم بالقديم عند تحجيم hug) — أُصلح على الوارد الجديد.
+- **بنية**: `npm run build` ينسخ static إلى standalone (شغّل البناء به دائماً لا `npx next build` مباشرة) — خلل 404 chunks كُشف عبر خطاف الاختبار.

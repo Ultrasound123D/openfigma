@@ -4,7 +4,7 @@ import { useCallback, useRef, useState } from 'react'
 import { useEditorStore, generateId } from '@/store/editor-store'
 import type { DesignElement } from '@/store/editor-store'
 import { calculateSnapLines, constrainToAngle, type SnapLine } from '@/lib/snap-utils'
-import { findElementInList, simplifyPath, smoothPointsToPathPoints, pathPointsToVectorNetwork } from '@/lib/element-utils'
+import { findElementInList, simplifyPath, smoothPointsToPathPoints, pathPointsToVectorNetwork, findAncestors } from '@/lib/element-utils'
 import { loadImageAsBase64, createImageElement, isImageFile } from '@/lib/image-utils'
 // PHASE 11 — uniform scale engine
 import { scaleElementBy } from '@/lib/scale-element'
@@ -841,6 +841,52 @@ export function useElementInteractions({ viewport, hitTest, pen, pathEditing }: 
             }
           }
         }
+
+        // PHASE 12 — reorder inside auto-layout frames: dropping a child inside
+        // its own auto-layout parent computes the insertion index from the drop
+        // point along the layout axis (Figma reorder-on-drop behavior).
+        {
+          const s = useEditorStore.getState()
+          const primaryId = s.selectedElementIds[0]
+          if (primaryId) {
+            const chain = findAncestors(s.elements, primaryId)
+            const parent = chain[0]
+            if (parent && parent.type === 'frame' && parent.autoLayout && parent.children &&
+                parent.id !== dropTargetFrameId) {
+              // frame absolute position (children coords are parent-relative)
+              let frameAbsX = parent.x
+              let frameAbsY = parent.y
+              for (let i = 1; i < chain.length; i++) {
+                frameAbsX += chain[i].x
+                frameAbsY += chain[i].y
+              }
+              const pt = screenToCanvas(e.clientX, e.clientY)
+              const relX = pt.x - frameAbsX
+              const relY = pt.y - frameAbsY
+              const isH = parent.autoLayout.direction === 'horizontal'
+              const inFlow = parent.children.filter(c => c.visible && c.layoutPositioning !== 'absolute')
+              let insertAt = inFlow.length
+              for (let i = 0; i < inFlow.length; i++) {
+                const c = inFlow[i]
+                const center = isH ? c.x + c.width / 2 : c.y + c.height / 2
+                const pointer = isH ? relX : relY
+                if (pointer < center) { insertAt = i; break }
+              }
+              // convert in-flow position to full-children index
+              let targetIndex = parent.children.length
+              if (insertAt < inFlow.length) {
+                targetIndex = parent.children.findIndex(c => c.id === inFlow[insertAt].id)
+              }
+              const currentIndex = parent.children.findIndex(c => c.id === primaryId)
+              if (currentIndex !== -1 && targetIndex !== currentIndex) {
+                s.reorderChild(parent.id, primaryId, targetIndex)
+              } else {
+                s.syncAutoLayoutTree(primaryId)
+              }
+            }
+          }
+        }
+
         useEditorStore.getState().pushHistory()
         setIsDragging(false)
         dragStartRef.current = null

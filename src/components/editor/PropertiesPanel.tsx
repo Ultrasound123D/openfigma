@@ -10,6 +10,10 @@ import {
   AlignStartVertical,
   AlignCenterVertical,
   AlignEndVertical,
+  ArrowDown,
+  ArrowRight,
+  WrapText,
+  Pin,
   Link2,
   Link2Off,
   Plus,
@@ -25,7 +29,7 @@ import {
   AlignRight,
   AlignJustify,
 } from 'lucide-react'
-import { useEditorStore, DesignElement, FillStyle, StrokeStyle } from '@/store/editor-store'
+import { useEditorStore, DesignElement, FillStyle, StrokeStyle, AutoLayout } from '@/store/editor-store'
 import { ColorPicker } from './ColorPicker'
 import { GradientEditor } from './GradientEditor'
 import { EffectsPanel } from './EffectsPanel'
@@ -199,6 +203,23 @@ export function PropertiesPanel() {
       }
     }
     return null
+  }, [elements, selectedElementIds])
+
+  /** PHASE 12 — immediate parent frame of the selected element (recursive search) */
+  const getParentFrame = useCallback((): DesignElement | null => {
+    const id = selectedElementIds[0]
+    if (!id) return null
+    const search = (els: DesignElement[]): DesignElement | null => {
+      for (const e of els) {
+        if (e.children) {
+          if (e.children.some(c => c.id === id)) return e
+          const found = search(e.children)
+          if (found) return found
+        }
+      }
+      return null
+    }
+    return search(elements)
   }, [elements, selectedElementIds])
 
   const element = getSelectedElement()
@@ -907,7 +928,8 @@ export function PropertiesPanel() {
                     className="flex items-center gap-1 h-6 px-2 rounded bg-[#0D99FF] text-white text-[10px] font-medium hover:bg-[#0B87E0] transition-colors"
                     onClick={() => {
                       if (!element.autoLayout) {
-                        updateElement(element.id, { autoLayout: { direction: 'vertical', gap: 10, paddingTop: 10, paddingBottom: 10, paddingLeft: 10, paddingRight: 10, alignItems: 'start', justifyContent: 'start' } })
+                        // PHASE 12: Figma default — hug × hug (Shift+A behavior)
+                        updateElement(element.id, { autoLayout: { direction: 'vertical', gap: 10, paddingTop: 10, paddingBottom: 10, paddingLeft: 10, paddingRight: 10, alignItems: 'start', justifyContent: 'start', primaryAxisSizing: 'hug', counterAxisSizing: 'hug', wrap: false, counterAxisGap: 10, counterAxisAlignContent: 'start' } })
                       } else {
                         updateElement(element.id, { autoLayout: undefined })
                       }
@@ -917,33 +939,124 @@ export function PropertiesPanel() {
                   </button>
                 }
               />
-              {element.autoLayout && (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-[#888] w-14 shrink-0">Direction</span>
-                    <div className="flex gap-0.5">
-                      {(['vertical', 'horizontal'] as const).map((dir) => (
-                        <button key={dir} onClick={() => updateElement(element.id, { autoLayout: { ...element.autoLayout!, direction: dir } })} className={`flex items-center justify-center h-6 px-2 rounded text-[10px] transition-colors ${element.autoLayout!.direction === dir ? 'bg-[#0D99FF] text-white' : 'bg-[#1E1E1E] text-[#888] hover:bg-[#3C3C3C]'}`}>
-                          {dir.charAt(0).toUpperCase() + dir.slice(1)}
-                        </button>
+              {element.autoLayout && (() => {
+                const al = element.autoLayout!
+                const setAL = (patch: Partial<AutoLayout>) =>
+                  updateElement(element.id, { autoLayout: { ...al, ...patch } })
+                const iconBtn = (active: boolean, title: string, onClick: () => void, children: React.ReactNode) => (
+                  <button
+                    title={title}
+                    onClick={() => { pushHistory(); onClick() }}
+                    className={`flex items-center justify-center w-6 h-6 rounded transition-colors ${active ? 'bg-[#0D99FF] text-white' : 'bg-[#1E1E1E] text-[#888] hover:bg-[#3C3C3C] hover:text-[#CCC]'}`}
+                  >{children}</button>
+                )
+                const isH = al.direction === 'horizontal'
+                return (
+                <div className="space-y-2" data-testid="autolayout-panel">
+                  {/* Row 1: direction + wrap (source: layoutMode/layoutWrap) */}
+                  <div className="flex items-center gap-1">
+                    {iconBtn(!isH, 'Vertical direction', () => setAL({ direction: 'vertical' }), <ArrowDown className="w-3 h-3" />)}
+                    {iconBtn(isH, 'Horizontal direction', () => setAL({ direction: 'horizontal' }), <ArrowRight className="w-3 h-3" />)}
+                    <div className="w-2" />
+                    {iconBtn(!!al.wrap, 'Wrap contents', () => setAL({ wrap: !al.wrap }), <WrapText className="w-3 h-3" />)}
+                    <div className="flex-1" />
+                    {/* Primary axis align (source: primaryAxisAlignItems MIN/CENTER/MAX/SPACE_BETWEEN) */}
+                    {iconBtn(al.justifyContent === 'start', 'Align start (primary axis)', () => setAL({ justifyContent: 'start' }),
+                      isH ? <AlignStartHorizontal className="w-3 h-3" /> : <AlignStartVertical className="w-3 h-3" />)}
+                    {iconBtn(al.justifyContent === 'center', 'Align center (primary axis)', () => setAL({ justifyContent: 'center' }),
+                      isH ? <AlignCenterHorizontal className="w-3 h-3" /> : <AlignCenterVertical className="w-3 h-3" />)}
+                    {iconBtn(al.justifyContent === 'end', 'Align end (primary axis)', () => setAL({ justifyContent: 'end' }),
+                      isH ? <AlignEndHorizontal className="w-3 h-3" /> : <AlignEndVertical className="w-3 h-3" />)}
+                    {iconBtn(al.justifyContent === 'space-between', 'Space between (primary axis)', () => setAL({ justifyContent: 'space-between' }),
+                      isH ? <AlignHorizontalSpaceAround className="w-3 h-3" /> : <AlignVerticalSpaceAround className="w-3 h-3" />)}
+                  </div>
+
+                  {/* Row 2: counter axis align (source: counterAxisAlignItems MIN/CENTER/MAX/BASELINE) */}
+                  <div className="flex items-center gap-1">
+                    {iconBtn(al.alignItems === 'start', 'Align start (counter axis)', () => setAL({ alignItems: 'start' }),
+                      isH ? <AlignStartVertical className="w-3 h-3" /> : <AlignStartHorizontal className="w-3 h-3" />)}
+                    {iconBtn(al.alignItems === 'center', 'Align center (counter axis)', () => setAL({ alignItems: 'center' }),
+                      isH ? <AlignCenterVertical className="w-3 h-3" /> : <AlignCenterHorizontal className="w-3 h-3" />)}
+                    {iconBtn(al.alignItems === 'end', 'Align end (counter axis)', () => setAL({ alignItems: 'end' }),
+                      isH ? <AlignEndVertical className="w-3 h-3" /> : <AlignEndHorizontal className="w-3 h-3" />)}
+                    {iconBtn(al.alignItems === 'baseline', 'Baseline (counter axis)', () => setAL({ alignItems: 'baseline' }),
+                      <span className="text-[8px] font-mono leading-none">A_</span>)}
+                    {iconBtn(al.alignItems === 'stretch', 'Stretch (legacy)', () => setAL({ alignItems: 'stretch' }),
+                      <span className="text-[8px] font-mono leading-none">⇕</span>)}
+                    <div className="flex-1" />
+                    {/* Gap (itemSpacing) */}
+                    <span className="text-[10px] text-[#888]">Gap</span>
+                    <input
+                      type="text"
+                      data-testid="al-gap"
+                      value={al.gap}
+                      onChange={(e) => { const num = parseInt(e.target.value); if (!isNaN(num)) setAL({ gap: num }) }}
+                      className="w-12 h-6 px-1.5 text-[11px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF] tabular-nums"
+                    />
+                  </div>
+
+                  {/* Wrap controls: counter gap + line alignment (source: counterAxisSpacing / counterAxisAlignContent) */}
+                  {al.wrap && (
+                    <div className="flex items-center gap-1" data-testid="al-wrap-row">
+                      <span className="text-[10px] text-[#888]">Row gap</span>
+                      <input
+                        type="text"
+                        value={al.counterAxisGap ?? 10}
+                        onChange={(e) => { const num = parseInt(e.target.value); if (!isNaN(num)) setAL({ counterAxisGap: num }) }}
+                        className="w-12 h-6 px-1.5 text-[11px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF] tabular-nums"
+                      />
+                      <div className="flex-1" />
+                      {(['start', 'center', 'end', 'space-between'] as const).map((m) => (
+                        <button
+                          key={m}
+                          title={`Wrap lines: ${m}`}
+                          onClick={() => { pushHistory(); setAL({ counterAxisAlignContent: m }) }}
+                          className={`h-6 px-1.5 rounded text-[9px] transition-colors ${(al.counterAxisAlignContent || 'start') === m ? 'bg-[#0D99FF] text-white' : 'bg-[#1E1E1E] text-[#888] hover:bg-[#3C3C3C]'}`}
+                        >{m === 'space-between' ? 'sp-bet' : m}</button>
                       ))}
                     </div>
-                  </div>
+                  )}
+
+                  {/* Padding */}
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-[#888] w-14 shrink-0">Gap</span>
-                    <input type="text" value={element.autoLayout.gap} onChange={(e) => { const num = parseInt(e.target.value); if (!isNaN(num)) updateElement(element.id, { autoLayout: { ...element.autoLayout!, gap: num } }) }} className="w-16 h-6 px-1.5 text-[11px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF] tabular-nums" />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-[#888] w-14 shrink-0">Padding</span>
+                    <span className="text-[10px] text-[#888] w-11 shrink-0">Padding</span>
                     <div className="grid grid-cols-2 gap-1 flex-1">
-                      <PropertyInput label="T" value={element.autoLayout.paddingTop} onChange={(v) => { const num = parseInt(v); if (!isNaN(num)) updateElement(element.id, { autoLayout: { ...element.autoLayout!, paddingTop: num } }) }} />
-                      <PropertyInput label="R" value={element.autoLayout.paddingRight} onChange={(v) => { const num = parseInt(v); if (!isNaN(num)) updateElement(element.id, { autoLayout: { ...element.autoLayout!, paddingRight: num } }) }} />
-                      <PropertyInput label="B" value={element.autoLayout.paddingBottom} onChange={(v) => { const num = parseInt(v); if (!isNaN(num)) updateElement(element.id, { autoLayout: { ...element.autoLayout!, paddingBottom: num } }) }} />
-                      <PropertyInput label="L" value={element.autoLayout.paddingLeft} onChange={(v) => { const num = parseInt(v); if (!isNaN(num)) updateElement(element.id, { autoLayout: { ...element.autoLayout!, paddingLeft: num } }) }} />
+                      <PropertyInput label="T" value={al.paddingTop} onChange={(v) => { const num = parseInt(v); if (!isNaN(num)) setAL({ paddingTop: num }) }} />
+                      <PropertyInput label="R" value={al.paddingRight} onChange={(v) => { const num = parseInt(v); if (!isNaN(num)) setAL({ paddingRight: num }) }} />
+                      <PropertyInput label="B" value={al.paddingBottom} onChange={(v) => { const num = parseInt(v); if (!isNaN(num)) setAL({ paddingBottom: num }) }} />
+                      <PropertyInput label="L" value={al.paddingLeft} onChange={(v) => { const num = parseInt(v); if (!isNaN(num)) setAL({ paddingLeft: num }) }} />
+                    </div>
+                  </div>
+
+                  {/* Frame sizing (source: primaryAxisSizingMode / counterAxisSizingMode FIXED/HUG/FILL) */}
+                  <div className="flex items-center gap-2" data-testid="al-sizing-row">
+                    <span className="text-[10px] text-[#888] w-11 shrink-0">Size</span>
+                    <div className="flex items-center gap-1 flex-1">
+                      <span className="text-[10px] text-[#888]">{isH ? 'W' : 'H'}</span>
+                      <select
+                        value={(isH ? al.primaryAxisSizing : al.counterAxisSizing) || 'fixed'}
+                        onChange={(e) => { pushHistory(); setAL(isH ? { primaryAxisSizing: e.target.value as AutoLayout['primaryAxisSizing'] } : { counterAxisSizing: e.target.value as AutoLayout['counterAxisSizing'] }) }}
+                        className="flex-1 h-6 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF] capitalize"
+                      >
+                        <option value="fixed">Fixed</option>
+                        <option value="hug">Hug</option>
+                        <option value="fill">Fill</option>
+                      </select>
+                      <span className="text-[10px] text-[#888]">{isH ? 'H' : 'W'}</span>
+                      <select
+                        value={(isH ? al.counterAxisSizing : al.primaryAxisSizing) || 'fixed'}
+                        onChange={(e) => { pushHistory(); setAL(isH ? { counterAxisSizing: e.target.value as AutoLayout['counterAxisSizing'] } : { primaryAxisSizing: e.target.value as AutoLayout['primaryAxisSizing'] }) }}
+                        className="flex-1 h-6 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF] capitalize"
+                      >
+                        <option value="fixed">Fixed</option>
+                        <option value="hug">Hug</option>
+                        <option value="fill">Fill</option>
+                      </select>
                     </div>
                   </div>
                 </div>
-              )}
+                )
+              })()}
             </div>
           )}
 
@@ -1035,6 +1148,59 @@ export function PropertiesPanel() {
                 </div>
               </div>
             </div>
+          </div>
+            )
+          })()}
+
+          {/* Layout sizing (PHASE 12 — children of auto-layout frames).
+              Source: layoutSizingHorizontal/layoutSizingVertical (FILL 81 / HUG 8 / FIXED 18)
+              + layoutPositioning AUTO/ABSOLUTE + min/max dimensions. */}
+          {(() => {
+            const parent = getParentFrame()
+            if (!parent || parent.type !== 'frame' || !parent.autoLayout) return null
+            const isH = parent.autoLayout.direction === 'horizontal'
+            return (
+          <div data-testid="layout-sizing">
+            <SectionHeader title="Layout Sizing" />
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-[#888] w-6 shrink-0">W</span>
+              <select
+                value={element.layoutSizingH || 'fixed'}
+                onChange={(e) => { pushHistory(); updateElement(element.id, { layoutSizingH: e.target.value as 'fixed' | 'hug' | 'fill' }) }}
+                className="flex-1 h-6 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF] capitalize"
+              >
+                <option value="fixed">Fixed</option>
+                <option value="hug">Hug</option>
+                <option value="fill">Fill{isH ? ' (main axis)' : ''}</option>
+              </select>
+              <span className="text-[10px] text-[#888] w-6 shrink-0 text-right">H</span>
+              <select
+                value={element.layoutSizingV || 'fixed'}
+                onChange={(e) => { pushHistory(); updateElement(element.id, { layoutSizingV: e.target.value as 'fixed' | 'hug' | 'fill' }) }}
+                className="flex-1 h-6 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF] capitalize"
+              >
+                <option value="fixed">Fixed</option>
+                <option value="hug">Hug</option>
+                <option value="fill">Fill{isH ? '' : ' (main axis)'}</option>
+              </select>
+              <button
+                title="Absolute position (excluded from auto layout flow)"
+                onClick={() => { pushHistory(); updateElement(element.id, { layoutPositioning: element.layoutPositioning === 'absolute' ? 'auto' : 'absolute' }) }}
+                className={`flex items-center justify-center w-6 h-6 rounded transition-colors shrink-0 ${element.layoutPositioning === 'absolute' ? 'bg-[#0D99FF] text-white' : 'bg-[#1E1E1E] text-[#888] hover:bg-[#3C3C3C]'}`}
+              >
+                <Pin className="w-3 h-3" />
+              </button>
+            </div>
+            {/* min/max dimensions (source: minWidth/minHeight/maxWidth/maxHeight) */}
+            <div className="grid grid-cols-2 gap-1 mt-2">
+              <PropertyInput label="Min W" value={element.minWidth ?? ''} onChange={(v) => updateElement(element.id, { minWidth: v === '' ? undefined : parseInt(v) || 0 })} />
+              <PropertyInput label="Max W" value={element.maxWidth ?? ''} onChange={(v) => updateElement(element.id, { maxWidth: v === '' ? undefined : parseInt(v) || 0 })} />
+              <PropertyInput label="Min H" value={element.minHeight ?? ''} onChange={(v) => updateElement(element.id, { minHeight: v === '' ? undefined : parseInt(v) || 0 })} />
+              <PropertyInput label="Max H" value={element.maxHeight ?? ''} onChange={(v) => updateElement(element.id, { maxHeight: v === '' ? undefined : parseInt(v) || 0 })} />
+            </div>
+            {element.layoutPositioning === 'absolute' && (
+              <div className="text-[9px] text-[#0D99FF] mt-1">Absolute — x/y are manual</div>
+            )}
           </div>
             )
           })()}

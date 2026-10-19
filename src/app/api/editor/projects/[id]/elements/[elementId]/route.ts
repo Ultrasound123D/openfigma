@@ -49,6 +49,9 @@ const ELEMENT_PUT_WHITELIST = [
   // structure
   'children', 'autoLayout', 'clipContent', 'constraints', 'constraintsEdited',
   'booleanOperation', 'booleanSourceIds', 'booleanContours', 'isMask',
+  // PHASE 12 — auto layout child sizing + positioning + min/max
+  'layoutSizingH', 'layoutSizingV', 'layoutPositioning',
+  'minWidth', 'maxWidth', 'minHeight', 'maxHeight',
   // component system
   'isComponent', 'componentId', 'overrides',
   'isComponentSet', 'componentSetId', 'componentPropertyDefinitions',

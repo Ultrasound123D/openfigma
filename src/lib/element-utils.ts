@@ -22,6 +22,20 @@ export function findElementInList(elements: DesignElement[], id: string): Design
 }
 
 /**
+ * PHASE 12 — ancestor chain of an element: [immediateParent, ..., root].
+ * Empty when the element is root-level or not found.
+ */
+export function findAncestors(elements: DesignElement[], id: string): DesignElement[] {
+  for (const el of elements) {
+    if (el.id === id) return []
+    if (el.children && findElementInList(el.children, id)) {
+      return [el, ...findAncestors(elements, el.id)]
+    }
+  }
+  return []
+}
+
+/**
  * Flatten all elements (including children) to a flat list.
  */
 export function getAllElements(elements: DesignElement[]): DesignElement[] {

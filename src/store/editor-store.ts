@@ -1,7 +1,8 @@
 'use client'
 
 import { create } from 'zustand'
-import { findElementInList, updateElementInList, removeElementFromList, deepCloneElements, getAllElements } from '@/lib/element-utils'
+import { findElementInList, updateElementInList, removeElementFromList, deepCloneElements, getAllElements, findAncestors } from '@/lib/element-utils'
+import { computeAutoLayout } from '@/lib/auto-layout'
 import { normalizeServerElement, normalizeServerProject } from '@/lib/server-project'
 import {
   isBooleanOperandType, flattenOperand, polysToContours, contoursBounds, foldElementPolys,
@@ -16,6 +17,27 @@ import {
 import { constrainChildren, inferConstraints } from '@/lib/constraints'
 // PHASE 10 — real text measurement for auto-resize
 import { measureText } from '@/lib/text-measure'
+
+/**
+ * PHASE 12 — run the auto layout engine over each auto-layout frame in the
+ * ancestor chains of the given start ids (deepest first), writing positioned
+ * children + hug frame sizes back into the tree. Pure data pass: no history.
+ */
+function applyAutoLayoutSync(elements: DesignElement[], startIds: string[]): DesignElement[] {
+  let out = elements
+  for (const startId of startIds) {
+    const start = findElementInList(out, startId)
+    if (!start) continue
+    const chain: DesignElement[] = [start, ...findAncestors(out, startId)]
+    for (const node of chain) {
+      const cur = findElementInList(out, node.id)
+      if (!cur || cur.type !== 'frame' || !cur.autoLayout || !cur.children) continue
+      const res = computeAutoLayout(cur)
+      out = updateElementInList(out, cur.id, { children: res.children, width: res.width, height: res.height })
+    }
+  }
+  return out
+}
 
 /** Stable per-tab client id used for SSE echo suppression. */
 function generateClientId(): string {
@@ -150,8 +172,19 @@ export interface AutoLayout {
   paddingBottom: number
   paddingLeft: number
   paddingRight: number
-  alignItems: 'start' | 'center' | 'end' | 'stretch'
+  alignItems: 'start' | 'center' | 'end' | 'stretch' | 'baseline'
   justifyContent: 'start' | 'center' | 'end' | 'space-between'
+  /** PHASE 12 — Figma parity (source: layoutWrap 2 / HUG 8 / FILL 81 / FIXED 18 refs) */
+  /** wrap children into lines when main-axis extent overflows a fixed frame */
+  wrap?: boolean
+  /** gap between wrap lines (source: counterAxisSpacing) */
+  counterAxisGap?: number
+  /** line stacking alignment when wrapping (source: counterAxisAlignContent) */
+  counterAxisAlignContent?: 'start' | 'center' | 'end' | 'space-between'
+  /** frame sizing along main axis (source: primaryAxisSizingMode FIXED/HUG/FILL) */
+  primaryAxisSizing?: 'fixed' | 'hug' | 'fill'
+  /** frame sizing across main axis (source: counterAxisSizingMode FIXED/HUG/FILL) */
+  counterAxisSizing?: 'fixed' | 'hug' | 'fill'
 }
 
 /**
@@ -280,6 +313,16 @@ export interface DesignElement {
   blurs?: BlurEffect[]
   // Auto layout (for frames)
   autoLayout?: AutoLayout
+  /** PHASE 12 — auto layout child sizing (source: layoutSizingHorizontal/Vertical, FILL 81/HUG 8/FIXED 18) */
+  layoutSizingH?: 'fixed' | 'hug' | 'fill'
+  layoutSizingV?: 'fixed' | 'hug' | 'fill'
+  /** PHASE 12 — absolute positioning inside auto-layout parent (source: layoutPositioning) */
+  layoutPositioning?: 'auto' | 'absolute'
+  /** PHASE 12 — min/max dimensions (source: minWidth/minHeight/maxWidth/maxHeight 13 refs each) */
+  minWidth?: number
+  maxWidth?: number
+  minHeight?: number
+  maxHeight?: number
   // Export settings (PHASE 3: format/scale/quality per row)
   exportSettings?: { format: string; scale: number; quality?: number; suffix?: string }[]
   // Blend mode
@@ -445,6 +488,12 @@ interface EditorState {
   
   // Actions - Element CRUD
   updateElement: (id: string, updates: Partial<DesignElement>) => void
+  /** PHASE 12 — re-run the auto layout engine for an element's frame chain */
+  syncAutoLayoutTree: (elementId: string) => void
+  /** PHASE 12 — re-run the engine starting at a specific frame (then up the chain) */
+  syncAutoLayoutFrame: (frameId: string) => void
+  /** PHASE 12 — reorder a child inside its parent (auto layout re-flows) */
+  reorderChild: (frameId: string, childId: string, toIndex: number) => void
   moveElement: (id: string, dx: number, dy: number) => void
   addElement: (element: DesignElement) => void
   deleteElement: (id: string) => void
@@ -1512,10 +1561,59 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setShowRulers: (show) => set({ showRulers: show }),
 
   updateElement: (id, updates) =>
+    set((state) => {
+      const el = findElementInList(state.elements, id)
+      let applied = updates
+      // PHASE 12: manually resizing a hug-sized auto-layout frame switches that
+      // axis to fixed (Figma behavior) so the resize sticks instead of snapping back.
+      // NOTE: the switch applies on top of the INCOMING autoLayout (if the same
+      // update also changes direction/sizing, those win — never clobber them).
+      if (el?.autoLayout && (updates.width !== undefined || updates.height !== undefined)) {
+        const al = { ...(updates.autoLayout ?? el.autoLayout) }
+        const horiz = al.direction === 'horizontal'
+        if (updates.width !== undefined && (horiz ? al.primaryAxisSizing : al.counterAxisSizing) === 'hug') {
+          if (horiz) al.primaryAxisSizing = 'fixed'; else al.counterAxisSizing = 'fixed'
+        }
+        if (updates.height !== undefined && (horiz ? al.counterAxisSizing : al.primaryAxisSizing) === 'hug') {
+          if (horiz) al.counterAxisSizing = 'fixed'; else al.primaryAxisSizing = 'fixed'
+        }
+        applied = { ...updates, autoLayout: al }
+      }
+      const elements = applyAutoLayoutSync(updateElementInList(state.elements, id, applied), [id])
+      return { elements, isDirty: true }
+    }),
+
+  // PHASE 12 — auto layout sync actions
+  syncAutoLayoutTree: (elementId) =>
     set((state) => ({
-      elements: updateElementInList(state.elements, id, updates),
+      elements: applyAutoLayoutSync(state.elements, [elementId]),
       isDirty: true,
     })),
+
+  syncAutoLayoutFrame: (frameId) =>
+    set((state) => ({
+      elements: applyAutoLayoutSync(state.elements, [frameId]),
+      isDirty: true,
+    })),
+
+  reorderChild: (frameId, childId, toIndex) =>
+    set((state) => {
+      const frame = findElementInList(state.elements, frameId)
+      if (!frame || !frame.children) return state
+      const from = frame.children.findIndex(c => c.id === childId)
+      if (from === -1) return state
+      const children = [...frame.children]
+      const [moved] = children.splice(from, 1)
+      const idx = Math.max(0, Math.min(children.length, toIndex))
+      children.splice(idx, 0, moved)
+      return {
+        elements: applyAutoLayoutSync(
+          updateElementInList(state.elements, frameId, { children }),
+          [frameId]
+        ),
+        isDirty: true,
+      }
+    }),
 
   setLeftTab: (tab) => set({ leftTab: tab }),
   setRightTab: (tab) => set({ rightTab: tab }),
@@ -1547,10 +1645,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const childElement = element.constraintsEdited
             ? relChild
             : { ...relChild, constraints: inferConstraints(relChild, frame.width, frame.height) }
-          return {
-            elements: updateElementInList(state.elements, state.currentFrameId, {
+          const elements = applyAutoLayoutSync(
+            updateElementInList(state.elements, state.currentFrameId, {
               children: [...existingChildren, childElement],
             }),
+            [state.currentFrameId]
+          )
+          return {
+            elements,
             isDirty: true,
           }
         }
@@ -1562,21 +1664,33 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }),
 
   deleteElement: (id) =>
-    set((state) => ({
-      elements: removeElementFromList(state.elements, id),
-      selectedElementIds: state.selectedElementIds.filter((i) => i !== id),
-      isDirty: true,
-    })),
+    set((state) => {
+      // PHASE 12: capture the parent chain before removal so auto-layout frames re-flow
+      const ancestors = findAncestors(state.elements, id)
+      return {
+        elements: applyAutoLayoutSync(removeElementFromList(state.elements, id), ancestors.map(a => a.id)),
+        selectedElementIds: state.selectedElementIds.filter((i) => i !== id),
+        isDirty: true,
+      }
+    }),
 
   deleteSelectedElements: () =>
-    set((state) => ({
-      elements: state.selectedElementIds.reduce(
+    set((state) => {
+      // PHASE 12: capture all ancestor chains before removal (auto-layout re-flow)
+      const ancestorIds = new Set<string>()
+      for (const id of state.selectedElementIds) {
+        for (const a of findAncestors(state.elements, id)) ancestorIds.add(a.id)
+      }
+      const removed = state.selectedElementIds.reduce(
         (els, id) => removeElementFromList(els, id),
         state.elements
-      ),
-      selectedElementIds: [],
-      isDirty: true,
-    })),
+      )
+      return {
+        elements: applyAutoLayoutSync(removed, [...ancestorIds]),
+        selectedElementIds: [],
+        isDirty: true,
+      }
+    }),
 
   duplicateElement: (id) =>
     set((state) => {
@@ -2954,8 +3068,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const newChildren = [...existingChildren, withConstraints]
       const newElements = updateElementInList(elementsWithout, frameId, { children: newChildren })
 
+      // PHASE 12: re-flow the target frame (and its chain) when it uses auto layout
+      const synced = applyAutoLayoutSync(newElements, [frameId])
+
       return {
-        elements: newElements,
+        elements: synced,
         isDirty: true,
       }
     }),
@@ -3025,11 +3142,28 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   reorderElement: (id, newIndex) =>
     set((state) => {
       const oldIndex = state.elements.findIndex((el) => el.id === id)
-      if (oldIndex === -1 || oldIndex === newIndex) return state
-      const newElements = [...state.elements]
-      const [element] = newElements.splice(oldIndex, 1)
-      newElements.splice(newIndex, 0, element)
-      return { elements: newElements, isDirty: true }
+      if (oldIndex !== -1) {
+        if (oldIndex === newIndex) return state
+        const newElements = [...state.elements]
+        const [element] = newElements.splice(oldIndex, 1)
+        newElements.splice(newIndex, 0, element)
+        return { elements: newElements, isDirty: true }
+      }
+      // PHASE 12: child reorder — find the parent and reorder inside it
+      const parent = findAncestors(state.elements, id)[0]
+      if (!parent || !parent.children) return state
+      const childIndex = parent.children.findIndex(c => c.id === id)
+      if (childIndex === -1) return state
+      const children = [...parent.children]
+      const [moved] = children.splice(childIndex, 1)
+      children.splice(Math.max(0, Math.min(children.length, newIndex)), 0, moved)
+      return {
+        elements: applyAutoLayoutSync(
+          updateElementInList(state.elements, parent.id, { children }),
+          [parent.id]
+        ),
+        isDirty: true,
+      }
     }),
 }))
 
@@ -3053,4 +3187,12 @@ function wrapRequest<T>(request: IDBRequest<T>): Promise<T> {
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error)
   })
+}
+
+// PHASE 12 — test/debug hook: expose the store on window so live browser
+// verification (and future phase checks) can seed state and assert geometry
+// without going through synthetic DOM events. Harmless in production builds
+// (no credentials, no server surface — the API whitelist still guards writes).
+if (typeof window !== 'undefined') {
+  (window as unknown as Record<string, unknown>).__openfigma = useEditorStore
 }
