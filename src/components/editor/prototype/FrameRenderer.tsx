@@ -17,6 +17,7 @@ import React from 'react'
 import type { DesignElement } from '@/store/editor-store'
 import { pathElementToSvgPath, isEvenOddFill } from '@/lib/element-utils'
 import { calculateAutoLayout, hasAutoLayout } from '@/lib/auto-layout'
+import { buildTextLines, applyTextCase } from '@/lib/text-measure'
 
 /** Resolve the SVG fill value for an element (solid / gradient / image). */
 function fillOf(el: DesignElement): string {
@@ -139,29 +140,68 @@ function Shape({ el }: { el: DesignElement }) {
     case 'text': {
       const fontSize = el.fontSize || 18
       const lineHeightPx = fontSize * (el.lineHeight || 1.4)
-      const lines = (el.textContent || 'Text').split('\n')
-      const startY = (el.height - lines.length * lineHeightPx) / 2 + fontSize
+      // PHASE 13: list-aware lines + vertical alignment (parity with Canvas)
+      const params = {
+        text: el.textContent || 'Text',
+        fontFamily: el.fontFamily || 'Inter',
+        fontSize,
+        fontWeight: el.fontWeight || 400,
+        lineHeight: el.lineHeight || 1.4,
+        letterSpacing: el.letterSpacing || 0,
+        fontStyle: el.fontStyle,
+      }
+      const displayLines = buildTextLines(params, {
+        listType: el.listType || 'none',
+        listIndent: el.listIndent || 0,
+        autoResize: el.textAutoResize || 'fixed',
+        boxWidth: el.width,
+      })
+      const lines = displayLines.map(l => ({ ...l, text: applyTextCase(l.text, el.textCase) }))
+      const totalH = lines.length * lineHeightPx
+      const valign = el.textAlignVertical || 'middle'
+      const vOff = valign === 'top' ? 0 : valign === 'bottom' ? Math.max(0, el.height - totalH) : Math.max(0, (el.height - totalH) / 2)
+      const startY = vOff + fontSize
       const anchor = el.textAlign === 'center' ? 'middle' : el.textAlign === 'right' ? 'end' : 'start'
-      const x = el.textAlign === 'center' ? el.width / 2 : el.textAlign === 'right' ? el.width : 0
+      const x = el.textAlign === 'center'
+        ? (l: { x: number }) => l.x + (el.width - l.x) / 2
+        : el.textAlign === 'right'
+          ? () => el.width
+          : (l: { x: number }) => l.x
       return (
         <g opacity={el.opacity / 100}>
           {lines.map((line, i) => (
-            <text
-              key={i}
-              x={x}
-              y={startY + i * lineHeightPx}
-              fontSize={fontSize}
-              fontWeight={el.fontWeight || 400}
-              fontFamily={el.fontFamily || 'Inter, system-ui, sans-serif'}
-              fontStyle={el.fontStyle || 'normal'}
-              letterSpacing={el.letterSpacing || 0}
-              fill={el.textColor || el.fill || '#000000'}
-              textAnchor={anchor}
-              textDecoration={el.textDecoration || 'none'}
-              style={{ pointerEvents: 'none', userSelect: 'none' }}
-            >
-              {line}
-            </text>
+            <React.Fragment key={i}>
+              {line.prefix && (
+                <text
+                  x={line.prefixX ?? 0}
+                  y={startY + i * lineHeightPx}
+                  fontSize={fontSize}
+                  fontWeight={el.fontWeight || 400}
+                  fontFamily={el.fontFamily || 'Inter, system-ui, sans-serif'}
+                  fontStyle={el.fontStyle || 'normal'}
+                  letterSpacing={el.letterSpacing || 0}
+                  fill={el.textColor || el.fill || '#000000'}
+                  style={{ pointerEvents: 'none', userSelect: 'none' }}
+                >
+                  {line.prefix}
+                </text>
+              )}
+              <text
+                x={x(line)}
+                y={startY + i * lineHeightPx}
+                fontSize={fontSize}
+                fontWeight={el.fontWeight || 400}
+                fontFamily={el.fontFamily || 'Inter, system-ui, sans-serif'}
+                fontStyle={el.fontStyle || 'normal'}
+                letterSpacing={el.letterSpacing || 0}
+                fill={el.textColor || el.fill || '#000000'}
+                textAnchor={anchor}
+                textDecoration={el.textDecoration || 'none'}
+                style={{ pointerEvents: 'none', userSelect: 'none' }}
+              >
+                {line.text}
+              </text>
+            </React.Fragment>
           ))}
         </g>
       )

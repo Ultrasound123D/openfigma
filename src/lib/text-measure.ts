@@ -101,3 +101,73 @@ export function applyTextCase(text: string, textCase: 'original' | 'upper' | 'lo
   // title case: capitalize first letter of each word
   return text.replace(/\p{L}[\p{L}\p{M}]*/gu, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
 }
+
+/**
+ * PHASE 13 — list-aware text line building (source evidence: ordered 12 /
+ * unordered 6 refs; textAlignVertical TOP 33 / BOTTOM 35 / MIDDLE; JUSTIFIED 12).
+ *
+ * Builds display lines with list prefixes (bullets / numbers) and hanging
+ * indent semantics: the first line of each list item starts after the prefix,
+ * continuation lines align under it (wrap width reduced by indent + prefix).
+ */
+export type TextListType = 'none' | 'ordered' | 'unordered'
+
+export interface TextDisplayLine {
+  /** content text (without prefix) */
+  text: string
+  /** x offset where the text starts (after prefix / indent) */
+  x: number
+  /** list prefix rendered at (x - prefixWidth), e.g. "•" or "3." */
+  prefix?: string
+  /** x offset where the prefix is rendered */
+  prefixX?: number
+}
+
+export interface BuildTextLinesOpts {
+  listType?: TextListType
+  /** extra indent before the prefix (Figma list indent) */
+  listIndent?: number
+  autoResize?: 'fixed' | 'hug' | 'grow'
+  boxWidth?: number
+}
+
+export function buildTextLines(p: TextStyleParams, opts: BuildTextLinesOpts = {}): TextDisplayLine[] {
+  const { listType = 'none', listIndent = 0, autoResize = 'fixed', boxWidth = 0 } = opts
+  const rawLines = p.text.split('\n')
+  if (listType === 'none') {
+    if (autoResize === 'hug') {
+      return rawLines.map(l => ({ text: l, x: 0 }))
+    }
+    const wrapped: TextDisplayLine[] = []
+    for (const l of rawLines) {
+      for (const w of wrapText(l, p, Math.max(1, boxWidth))) wrapped.push({ text: w, x: 0 })
+    }
+    return wrapped
+  }
+  // list mode: each paragraph is one item; hanging indent under the prefix
+  const out: TextDisplayLine[] = []
+  let itemIndex = 0
+  for (const para of rawLines) {
+    const prefix = listType === 'ordered' ? `${itemIndex + 1}.` : '•'
+    const prefixWidth = measureLine(prefix + ' ', p)
+    const indent = listIndent
+    const textX = indent + prefixWidth
+    if (para.length === 0) {
+      out.push({ text: '', x: textX, prefix, prefixX: indent })
+      itemIndex++
+      continue
+    }
+    if (autoResize === 'hug') {
+      out.push({ text: para, x: textX, prefix, prefixX: indent })
+    } else {
+      const wrapWidth = Math.max(1, boxWidth - textX)
+      const words = wrapText(para, p, wrapWidth)
+      words.forEach((w, i) => {
+        if (i === 0) out.push({ text: w, x: textX, prefix, prefixX: indent })
+        else out.push({ text: w, x: textX })
+      })
+    }
+    itemIndex++
+  }
+  return out
+}

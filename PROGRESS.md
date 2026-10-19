@@ -16,8 +16,9 @@
 | PHASE 10 | عمق النص: textAutoResize (fixed/hug/grow بقياس canvas حقيقي) + textCase + شطب + أنماط تعبئة الصورة fill/fit/crop | ✅ |
 | PHASE 11 | أدوات الدقة + الختام: Scale tool (K) + Deep select (⌘نقرة) + قياس المسافات (alt+تحويم) + حزمة تسليم | ✅ |
 | PHASE 12 | Auto Layout كامل: WRAP + أحجام FIXED/HUG/FILL (إطار+أبناء) + min/max + محاذاة counter منفصلة + baseline + أبناء absolute + reorder-on-drop + لوحة UI بتعادل Figma | ✅ |
+| PHASE 13 | نص متقدم: محاذاة عمودية top/middle/bottom + justified (توزيع كلمات فعلي) + قوائم ordered/unordered بمسافة بادئة معلّقة + إصلاح أمني (whitelist موحّد POST/PUT) | ✅ |
 
-> **المراحل 0 ← 12 مغلقة.** خطة النقل الكامل: PORT-PLAN-12-16.md (12✅ ← 16).
+> **المراحل 0 ← 13 مغلقة.** خطة النقل الكامل: PORT-PLAN-12-16.md (12✅ ← 16).
 
 ## سجل التحقق
 - Baseline (قبل PHASE 1): tsc ✅ / lint ✅ / build ✅
@@ -57,3 +58,11 @@
 - **التحقق**: tsc صفر / eslint صفر / next build ناجح. حي بالمتصفح عبر خطاف اختبار window.__openfigma: hug×hug (96×108 مطابقة تامة)، fill عرضي (80=96-16 ثم 184=200-16)، wrap بفجوة صفوف (H=102، سطران، نص hug مقاس 50px)، min/max (150→180)، reorder (B للأمام)، absolute (خارج التدفق بموضع يدوي). VLM أكّد: إطار ملتف على المحتوى + سطرا wrap مرئيان + لوحة AL كاملة. لقطات: download/openfigma-p12-{hug,fill,wrap,child-sizing,absolute}.png
 - **إصلاح أثناء التحقق**: خلل كبس autoLayout في updateElement (كان يستبدل القادم بالقديم عند تحجيم hug) — أُصلح على الوارد الجديد.
 - **بنية**: `npm run build` ينسخ static إلى standalone (شغّل البناء به دائماً لا `npx next build` مباشرة) — خلل 404 chunks كُشف عبر خطاف الاختبار.
+
+## PHASE 13 — تفصيل التنفيذ والتحقق (2026-10-20)
+- **buildTextLines** (lib/text-measure.ts): بناء أسطر واعٍ بالقوائم — كل فقرة = عنصر قائمة، بادئة •/رقم بمسافة بادئة معلّقة (الأسطر الملتفة تصطف تحت النص لا تحت البادئة)، أوضاع hug/grow محترمة.
+- **النموذج**: textAlignVertical (top/middle/bottom) + listType (none/ordered/unordered) + listIndent. applyTextAutoSize أصبح واعياً بالقوائم (الارتفاع/العرض hug يطابق الرندر).
+- **الرندر** (Canvas + FrameRenderer بتعادل): محاذاة عمودية حقيقية (إزاحة السطر الأول top=0/middle/bottom)، justified بتوزيع كلمات فعلي عبر العرض (آخر سطر يبقى يساراً)، بادئات القوائم + مسافة معلّقة، ضبط الشطب والمحاذاة center/right مع القوائم.
+- **UI**: أزرار V-Align الثلاثة + أزرار List (—/•/1.) + حقل Indent يظهر عند تفعيل القائمة. زر justified الرابع كان موجوداً.
+- **إصلاح أمني (عيب قديم كُشف بالتحقق)**: مسار POST للعناصر كان ينشر جسم العميل خاماً بلا whitelist (PUT فقط كان محمياً) — أُنشئ src/lib/element-whitelist.ts كمصدر واحد للقائمتين، مع تكريم id العميل (تعتمد عليه اختبارات الدخان وMCP).
+- **التحقق**: tsc/eslint/build صفر. API round-trip للحقول الثلاثة + justified مع حجب evilField على POST وPUT. حي بالمتصفح: أعلى y=18 مقابل أسفل y=102 (دقة كاملة)، قائمة مرقمة 1./2./3. بمسافة معلّقة (بادئة x=12، نص x=30/33)، نقاط •، justified موزّع (First@0/line@105/of@203/text@288). VLM أكّد القائمة المرقمة وأزرار V-Align/List. لقطات: download/openfigma-p13-{valign-bottom,list-ordered,justified}.png

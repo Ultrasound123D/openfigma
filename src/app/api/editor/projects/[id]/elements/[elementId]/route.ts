@@ -4,6 +4,7 @@ import {
   removeElementFromList
 } from '@/lib/server-state'
 import { publishProjectEvent, getRequestOrigin } from '@/lib/events/bus'
+import { ELEMENT_FIELD_WHITELIST, pickElementFields } from '@/lib/element-whitelist'
 
 // GET /api/editor/projects/[id]/elements/[elementId]
 export async function GET(
@@ -31,54 +32,10 @@ export async function GET(
 // an explicit whitelist of DesignElement fields. This prevents clients from
 // injecting arbitrary/injected keys (e.g. __proto__-adjacent junk or future
 // server-only fields). New editor features must add their field here.
-const ELEMENT_PUT_WHITELIST = [
-  // identity & geometry
-  'name', 'type', 'x', 'y', 'width', 'height', 'rotation', 'opacity',
-  'visible', 'locked', 'flipH', 'flipV', 'blendMode',
-  // fills & strokes
-  'fill', 'stroke', 'strokeWidth', 'strokeStyle', 'strokeAlign',
-  'cornerRadius', 'cornerRadiusTL', 'cornerRadiusTR', 'cornerRadiusBL', 'cornerRadiusBR',
-  'fills', 'strokes',
-  // effects
-  'shadows', 'blurs',
-  // text
-  'textContent', 'fontFamily', 'fontSize', 'fontWeight', 'fontStyle',
-  'textDecoration', 'textAlign', 'lineHeight', 'letterSpacing', 'textColor',
-  // vector / shape
-  'pathPoints', 'pathClosed', 'vectorNetwork', 'sides', 'innerRadius',
-  // structure
-  'children', 'autoLayout', 'clipContent', 'constraints', 'constraintsEdited',
-  'booleanOperation', 'booleanSourceIds', 'booleanContours', 'isMask',
-  // PHASE 12 — auto layout child sizing + positioning + min/max
-  'layoutSizingH', 'layoutSizingV', 'layoutPositioning',
-  'minWidth', 'maxWidth', 'minHeight', 'maxHeight',
-  // component system
-  'isComponent', 'componentId', 'overrides',
-  'isComponentSet', 'componentSetId', 'componentPropertyDefinitions',
-  'variantProperties', 'variantGroupProperties', 'defaultVariant',
-  'componentProperties', 'componentPropertyReferences',
-  // arrows
-  'arrowStartId', 'arrowEndId', 'arrowHeadStyle',
-  // export settings (PHASE 3)
-  'exportSettings',
-  // prototype interactions (PHASE 2)
-  'interactions',
-  // PHASE 7 — style references
-  'fillStyleId', 'strokeStyleId', 'textStyleId', 'effectStyleId',
-  // PHASE 8 — per-frame layout grids
-  'layoutGrids',
-  // PHASE 10 — text sizing/case
-  'textAutoResize', 'textCase',
-] as const
+const ELEMENT_PUT_WHITELIST: readonly string[] = ELEMENT_FIELD_WHITELIST
 
 function pickWhitelisted(body: unknown): Record<string, unknown> {
-  if (typeof body !== 'object' || body === null) return {}
-  const source = body as Record<string, unknown>
-  const out: Record<string, unknown> = {}
-  for (const key of ELEMENT_PUT_WHITELIST) {
-    if (key in source) out[key] = source[key]
-  }
-  return out
+  return pickElementFields(body)
 }
 
 export async function PUT(

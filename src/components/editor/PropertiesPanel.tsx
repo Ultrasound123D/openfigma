@@ -852,6 +852,61 @@ export function PropertiesPanel() {
                     ))}
                   </div>
                 </div>
+                {/* PHASE 13: vertical alignment inside the text box (top/middle/bottom) */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-[#888] w-14 shrink-0">V-Align</span>
+                  <div className="flex gap-0.5">
+                    {([
+                      { v: 'top' as const, Icon: AlignStartVertical },
+                      { v: 'middle' as const, Icon: AlignCenterVertical },
+                      { v: 'bottom' as const, Icon: AlignEndVertical },
+                    ]).map(({ v, Icon }) => (
+                      <button
+                        key={v}
+                        onClick={() => { pushHistory(); handleTextChange('textAlignVertical', v) }}
+                        className={`flex items-center justify-center h-6 w-7 rounded transition-colors ${(element.textAlignVertical || 'middle') === v ? 'bg-[#0D99FF] text-white' : 'bg-[#1E1E1E] text-[#888] hover:bg-[#3C3C3C]'}`}
+                        title={`Vertical: ${v}`}
+                        data-testid={`valign-${v}`}
+                      >
+                        <Icon className="w-3.5 h-3.5" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {/* PHASE 13: lists — ordered / unordered + indent (source: ordered 12 / unordered 6) */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-[#888] w-14 shrink-0">List</span>
+                  <div className="flex gap-0.5">
+                    {([
+                      { t: 'none' as const, label: '—', title: 'No list' },
+                      { t: 'unordered' as const, label: '•', title: 'Bulleted list' },
+                      { t: 'ordered' as const, label: '1.', title: 'Numbered list' },
+                    ]).map(({ t, label, title }) => (
+                      <button
+                        key={t}
+                        onClick={() => { pushHistory(); handleTextChange('listType', t) }}
+                        className={`flex items-center justify-center h-6 w-8 rounded text-[11px] transition-colors ${(element.listType || 'none') === t ? 'bg-[#0D99FF] text-white' : 'bg-[#1E1E1E] text-[#888] hover:bg-[#3C3C3C]'}`}
+                        title={title}
+                        data-testid={`list-${t}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {(element.listType || 'none') !== 'none' && (
+                    <div className="flex items-center gap-1 flex-1">
+                      <span className="text-[10px] text-[#888]">Indent</span>
+                      <input
+                        type="text"
+                        value={element.listIndent ?? 16}
+                        onChange={(e) => { const num = parseInt(e.target.value); if (!isNaN(num) && num >= 0) handleTextChange('listIndent', num) }}
+                        onBlur={pushHistory}
+                        className="w-12 h-6 px-1.5 text-[11px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF] tabular-nums"
+                        title="List indent (px)"
+                      />
+                    </div>
+                  )}
+                </div>
                 {/* Line height + Letter spacing */}
                 <div className="grid grid-cols-2 gap-2">
                   <PropertyInput label="LH" value={element.lineHeight || 1.4} onChange={(v) => { const num = parseFloat(v); if (!isNaN(num) && num > 0) handleTextChange('lineHeight', num) }} onBlur={pushHistory} />

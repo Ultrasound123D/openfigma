@@ -4,6 +4,7 @@ import {
   removeElementFromList, flattenElements
 } from '@/lib/server-state'
 import { publishProjectEvent, getRequestOrigin } from '@/lib/events/bus'
+import { pickElementFields } from '@/lib/element-whitelist'
 
 // GET /api/editor/projects/[projectId]/elements
 export async function GET(
@@ -35,12 +36,20 @@ export async function POST(
   }
 
   const body = await request.json()
-  const { type = 'rectangle', parentId, ...overrides } = body
+  const { type = 'rectangle', parentId } = body as Record<string, unknown> & { type?: string; parentId?: string }
+  // PHASE 13: same field whitelist as PUT (DECISION-006) — no raw spread of
+  // client bodies; junk fields are dropped on create too.
+  const overrides = pickElementFields(body)
 
-  const id = `${type}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+  // Client-provided ids are honored (smoke tests + MCP integrations rely on
+  // stable ids); a safe generated id is used otherwise.
+  const clientId = typeof (body as Record<string, unknown>).id === 'string'
+    ? (body as Record<string, unknown>).id as string
+    : ''
+  const id = clientId || `${type}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
   const element = {
     id,
-    name: overrides.name || `${type}`,
+    name: (overrides.name as string) || `${type}`,
     type,
     x: 0,
     y: 0,

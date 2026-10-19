@@ -18,7 +18,7 @@ import { useCanvasKeyboard } from './canvas/use-canvas-keyboard'
 // PHASE 8 — per-frame layout grids renderer
 import { FrameGrids } from './canvas/FrameGrids'
 // PHASE 10 — real text measurement + case transform
-import { measureText, measureLine, applyTextCase } from '@/lib/text-measure'
+import { measureText, measureLine, applyTextCase, buildTextLines } from '@/lib/text-measure'
 
 // Generate SVG defs for gradients, filters, clip paths, and image patterns
 function generateSVGDefs(elements: DesignElement[], zoom: number): React.ReactNode {
@@ -310,28 +310,49 @@ const CanvasElement = React.memo(function CanvasElement({
         const textDecoration = el.textDecoration || 'none'
         // PHASE 10: real measurement drives line layout (wrap for grow, shrink for hug)
         const autoResize = el.textAutoResize || 'fixed'
-        const measured = measureText(
-          {
-            text: el.textContent || 'Text',
-            fontFamily: el.fontFamily || 'Inter',
-            fontSize, fontWeight, lineHeight, letterSpacing, fontStyle,
-          },
-          autoResize,
-          el.width
-        )
-        const lines = measured.lines.map((l) => applyTextCase(l, el.textCase))
-        const lineHeightPx = fontSize * lineHeight
-        const totalTextHeight = lines.length * lineHeightPx
-        const startY = (el.height - totalTextHeight) / 2 + fontSize
-        const clipId = `text-clip-${el.id}`
         const measureParams = {
           text: el.textContent || 'Text',
           fontFamily: el.fontFamily || 'Inter',
           fontSize, fontWeight, lineHeight, letterSpacing, fontStyle,
         }
+        // PHASE 13: list-aware lines (bullets / numbers with hanging indent)
+        const displayLines = buildTextLines(measureParams, {
+          listType: el.listType || 'none',
+          listIndent: el.listIndent || 0,
+          autoResize,
+          boxWidth: el.width,
+        })
+        const lines = displayLines.map((l) => ({ ...l, text: applyTextCase(l.text, el.textCase) }))
+        const lineHeightPx = fontSize * lineHeight
+        const totalTextHeight = lines.length * lineHeightPx
+        // PHASE 13: vertical alignment inside the text box (top/middle/bottom)
+        const valign = el.textAlignVertical || 'middle'
+        const valignOffset = valign === 'top' ? 0 : valign === 'bottom' ? Math.max(0, el.height - totalTextHeight) : Math.max(0, (el.height - totalTextHeight) / 2)
+        const startY = valignOffset + fontSize
+        const clipId = `text-clip-${el.id}`
         const anchorX = (i: number) =>
           textAlign === 'center' ? el.width / 2 : textAlign === 'right' ? el.width : 0
         void anchorX
+        // PHASE 13: justified — distribute words across the full line width
+        // (except the last line and lines that can't stretch)
+        const justifyLine = (lineText: string, lineX: number, isLast: boolean): { words: { w: string; x: number }[]; justified: boolean } => {
+          const words = lineText.split(/\s+/).filter(Boolean)
+          const avail = el.width - lineX
+          if (isLast || words.length < 2) return { words: [{ w: lineText, x: lineX }], justified: false }
+          const wordsW = words.map(w2 => measureLine(w2, measureParams))
+          const totalW = wordsW.reduce((a, b) => a + b, 0)
+          if (totalW >= avail) return { words: [{ w: lineText, x: lineX }], justified: false }
+          const gapW = (avail - totalW) / (words.length - 1)
+          let cursor = lineX
+          return {
+            words: words.map((w2, i2) => {
+              const item = { w: w2, x: cursor }
+              cursor += wordsW[i2] + gapW
+              return item
+            }),
+            justified: true,
+          }
+        }
         return (
           <g style={style}>
             {el.clipContent && (
@@ -344,29 +365,76 @@ const CanvasElement = React.memo(function CanvasElement({
             <rect x={0} y={0} width={el.width} height={el.height} fill="transparent" stroke="none" />
             <g clipPath={el.clipContent ? `url(#${clipId})` : undefined}>
               {lines.map((line, i) => {
-                const x = textAlign === 'center' ? el.width / 2 : textAlign === 'right' ? el.width : 0
+                // anchor x for center/right is computed against the usable
+                // region (after list indent/prefix), so lists can center too
+                const baseX = textAlign === 'center'
+                  ? line.x + (el.width - line.x) / 2
+                  : textAlign === 'right'
+                    ? el.width
+                    : line.x
+                const isJustified = textAlign === 'justified'
+                const jres = isJustified ? justifyLine(line.text, line.x, i === lines.length - 1) : null
                 return (
                   <g key={i}>
-                    <text
-                      x={x}
-                      y={startY + i * lineHeightPx}
-                      fontSize={fontSize}
-                      fontWeight={fontWeight}
-                      fontFamily={fontFamily}
-                      fontStyle={fontStyle}
-                      letterSpacing={letterSpacing}
-                      fill={textColor}
-                      textAnchor={textAlign === 'center' ? 'middle' : textAlign === 'right' ? 'end' : 'start'}
-                      textDecoration={textDecoration === 'underline' ? 'underline' : undefined}
-                      opacity={el.opacity / 100}
-                      style={{ pointerEvents: 'none', userSelect: 'none' }}
-                    >
-                      {line}
-                    </text>
+                    {/* PHASE 13: list prefix (bullet / number) at hanging indent */}
+                    {line.prefix && (
+                      <text
+                        x={line.prefixX ?? 0}
+                        y={startY + i * lineHeightPx}
+                        fontSize={fontSize}
+                        fontWeight={fontWeight}
+                        fontFamily={fontFamily}
+                        fontStyle={fontStyle}
+                        letterSpacing={letterSpacing}
+                        fill={textColor}
+                        opacity={el.opacity / 100}
+                        style={{ pointerEvents: 'none', userSelect: 'none' }}
+                      >
+                        {line.prefix}
+                      </text>
+                    )}
+                    {jres && jres.justified ? (
+                      /* PHASE 13: justified — words distributed across the width */
+                      jres.words.map((wordEl, wi) => (
+                        <text
+                          key={wi}
+                          x={wordEl.x}
+                          y={startY + i * lineHeightPx}
+                          fontSize={fontSize}
+                          fontWeight={fontWeight}
+                          fontFamily={fontFamily}
+                          fontStyle={fontStyle}
+                          letterSpacing={letterSpacing}
+                          fill={textColor}
+                          textDecoration={textDecoration === 'underline' ? 'underline' : undefined}
+                          opacity={el.opacity / 100}
+                          style={{ pointerEvents: 'none', userSelect: 'none' }}
+                        >
+                          {wordEl.w}
+                        </text>
+                      ))
+                    ) : (
+                      <text
+                        x={baseX}
+                        y={startY + i * lineHeightPx}
+                        fontSize={fontSize}
+                        fontWeight={fontWeight}
+                        fontFamily={fontFamily}
+                        fontStyle={fontStyle}
+                        letterSpacing={letterSpacing}
+                        fill={textColor}
+                        textAnchor={textAlign === 'center' ? 'middle' : textAlign === 'right' ? 'end' : 'start'}
+                        textDecoration={textDecoration === 'underline' ? 'underline' : undefined}
+                        opacity={el.opacity / 100}
+                        style={{ pointerEvents: 'none', userSelect: 'none' }}
+                      >
+                        {line.text}
+                      </text>
+                    )}
                     {/* PHASE 10: manual strikethrough (SVG line-through support is inconsistent) */}
-                    {textDecoration === 'strikethrough' && line.length > 0 && (() => {
-                      const w = measureLine(measured.lines[i], measureParams)
-                      const sx = textAlign === 'center' ? (el.width - w) / 2 : textAlign === 'right' ? el.width - w : 0
+                    {textDecoration === 'strikethrough' && line.text.length > 0 && (() => {
+                      const w = measureLine(line.text, measureParams)
+                      const sx = textAlign === 'center' ? baseX - w / 2 : textAlign === 'right' ? baseX - w : baseX
                       const sy = startY + i * lineHeightPx - fontSize * 0.28
                       return <line x1={sx} y1={sy} x2={sx + w} y2={sy} stroke={textColor} strokeWidth={Math.max(1, fontSize * 0.06)} />
                     })()}

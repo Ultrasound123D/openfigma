@@ -16,7 +16,7 @@ import {
 // PHASE 9 — constraints engine
 import { constrainChildren, inferConstraints } from '@/lib/constraints'
 // PHASE 10 — real text measurement for auto-resize
-import { measureText } from '@/lib/text-measure'
+import { measureText, buildTextLines } from '@/lib/text-measure'
 
 /**
  * PHASE 12 — run the auto layout engine over each auto-layout frame in the
@@ -372,6 +372,12 @@ export interface DesignElement {
   // PHASE 10 — text sizing/case/strikethrough
   textAutoResize?: 'fixed' | 'hug' | 'grow'
   textCase?: 'original' | 'upper' | 'lower' | 'title'
+  /** PHASE 13 — vertical alignment inside the text box (source: TOP 33 / MIDDLE / BOTTOM 35) */
+  textAlignVertical?: 'top' | 'middle' | 'bottom'
+  /** PHASE 13 — lists (source: ordered 12 / unordered 6 refs) */
+  listType?: 'none' | 'ordered' | 'unordered'
+  /** PHASE 13 — list indent before the bullet/number */
+  listIndent?: number
 }
 
 export interface Page {
@@ -1539,19 +1545,37 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (!el || el.type !== 'text') return state
       const mode = el.textAutoResize || 'fixed'
       if (mode === 'fixed') return state
-      const m = measureText(
-        {
-          text: el.textContent || '',
-          fontFamily: el.fontFamily || 'Inter',
-          fontSize: el.fontSize || 18,
-          fontWeight: el.fontWeight || 400,
-          lineHeight: el.lineHeight || 1.4,
-          letterSpacing: el.letterSpacing || 0,
-          fontStyle: el.fontStyle,
-        },
-        mode,
-        el.width
-      )
+      // PHASE 13: list-aware line building so heights match the renderer
+      const params = {
+        text: el.textContent || '',
+        fontFamily: el.fontFamily || 'Inter',
+        fontSize: el.fontSize || 18,
+        fontWeight: el.fontWeight || 400,
+        lineHeight: el.lineHeight || 1.4,
+        letterSpacing: el.letterSpacing || 0,
+        fontStyle: el.fontStyle,
+      }
+      if (el.listType && el.listType !== 'none') {
+        const lines = buildTextLines(params, {
+          listType: el.listType,
+          listIndent: el.listIndent,
+          autoResize: mode,
+          boxWidth: el.width,
+        })
+        const lineH = (el.fontSize || 18) * (el.lineHeight || 1.4)
+        const updates: Partial<DesignElement> = { height: Math.max(1, Math.ceil(lines.length * lineH)) }
+        if (mode === 'hug') {
+          // width: longest line content + its x offset (prefix + indent)
+          let maxW = 0
+          for (const l of lines) {
+            const w = measureText({ ...params, text: l.text || ' ' }, 'hug', el.width).width
+            maxW = Math.max(maxW, l.x + w)
+          }
+          updates.width = Math.max(1, Math.ceil(maxW))
+        }
+        return { elements: updateElementInList(state.elements, elementId, updates), isDirty: true }
+      }
+      const m = measureText(params, mode, el.width)
       const updates: Partial<DesignElement> = { height: Math.max(1, Math.round(m.height)) }
       if (mode === 'hug') updates.width = Math.max(1, Math.round(m.width))
       return { elements: updateElementInList(state.elements, elementId, updates), isDirty: true }
