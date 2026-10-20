@@ -91,3 +91,20 @@
   hidden locked master into the target project + a visible instance bound by
   componentId (instance semantics already exist). Cross-project live master
   linking is out of scope (no source evidence of the sync transport).
+
+### DECISION-018 — PHASE 20 open items: top-level childFilter + swap-at-source-slot
+- FrameRenderer applied childFilter only to NESTED children (renderInteractive
+  + TreeNode recursion); the direct children of the scrolling frame bypassed
+  it, so both the scroll layer and the fixed overlay rendered everything.
+  Fix: pre-filter topLevelChildren; the filter applies ONLY at that level
+  (fixed-when-scrolling applies to direct children of the scrollable frame in
+  the source — never recursive; TreeNode's filter prop removed).
+- change-to swap: the cloned target kept its OWN x/y, which can lie outside
+  the host frame's viewBox (clipped → "swap never appears"). The clone now
+  takes the SOURCE element's slot (Figma parity: Change To replaces in place).
+  Also: the original p20 test asserted translate(20,1240) — but elements move
+  to frame-relative coords on reparent ((-80,1180)) — test defect, not product.
+- swapMap is player component state and the player stays mounted while idle →
+  swaps leaked across stop/start preview. Now cleared on preview exit
+  (render-phase state adjustment pattern — eslint set-state-in-effect forbids
+  the effect form).

@@ -96,7 +96,14 @@ function applySwapMap(frame: DesignElement, swaps: Map<string, string>, pool: De
     const targetId = swaps.get(el.id)
     if (targetId) {
       const target = find(targetId)
-      if (target) return cloneWithNewIds(target, tag)
+      if (target) {
+        // PHASE 20 fix (open-item E, live-verified): the swapped-in node takes
+        // the SOURCE element's slot — cloneWithNewIds kept the target's own
+        // x/y, which can lie OUTSIDE the host frame's viewBox (clipped →
+        // "swap never appears"). Figma parity: Change To replaces the node in
+        // place (same top-left).
+        return { ...cloneWithNewIds(target, tag), x: el.x, y: el.y }
+      }
     }
     if (el.children?.length) {
       return { ...el, children: el.children.map(walk) }
@@ -144,6 +151,18 @@ export function PrototypePlayer() {
     window.addEventListener('resize', update)
     return () => window.removeEventListener('resize', update)
   }, [isPreviewing])
+
+  // PHASE 20 fix: restart presentation resets prototype state — the change-to
+  // swap map is transient and must NOT survive stop/start preview (the player
+  // component stays mounted while idle, so its useState would otherwise leak
+  // swaps into the next presentation run; Figma parity: fresh run, fresh state).
+  // Render-phase adjustment pattern (React docs: "adjusting state when a prop
+  // changes") — covers every stopPreview entry point incl. external callers.
+  const [prevPreviewing, setPrevPreviewing] = React.useState(isPreviewing)
+  if (prevPreviewing !== isPreviewing) {
+    setPrevPreviewing(isPreviewing)
+    if (!isPreviewing && swapMap.size > 0) setSwapMap(new Map())
+  }
 
   const currentFrame = useMemo(
     () => elements.find((el) => el.id === previewFrameId) ?? null,

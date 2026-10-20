@@ -420,21 +420,19 @@ function Shape({ el }: { el: DesignElement }) {
 function TreeNode({
   el,
   elementStyle,
-  filter,
 }: {
   el: DesignElement
   /** Per-element inline style override (used by smart-animate tweens). */
   elementStyle?: (el: DesignElement) => React.CSSProperties | undefined
-  /** PHASE 20 — render-pass child filter (fixed-scroll split). */
-  filter?: (el: DesignElement) => boolean
 }) {
   if (!el.visible) return null
 
-  const activeChildFilter = filter ?? null
+  // PHASE 20 fix (open-item C): the fixed/scroll render-pass filter is applied
+  // ONLY to the direct children of the scrolling frame (top-level pre-filter
+  // in renderFrameInternal). Nested descendants of a surviving child render
+  // in full — fixed-when-scrolling never applies recursively in the source.
   const isContainer = (el.type === 'frame' || el.type === 'group' || el.type === 'section' || el.type === 'component-set') && el.children?.length
   let children = el.children
-  // PHASE 20 — apply the render-pass child filter (fixed-scroll split)
-  if (activeChildFilter && children) children = children.filter(activeChildFilter)
   if (el.type === 'frame' && hasAutoLayout(el) && el.children) {
     children = calculateAutoLayout(el)
   }
@@ -461,16 +459,16 @@ function TreeNode({
               </defs>
               <g clipPath={`url(#${clipId})`}>
                 {buffer}
-                <TreeNode key={child.id} el={child} elementStyle={elementStyle} filter={filter} />
+                <TreeNode key={child.id} el={child} elementStyle={elementStyle} />
               </g>
             </g>
           )
           buffer = []
         } else {
-          buffer.push(<TreeNode key={child.id} el={child} elementStyle={elementStyle} filter={filter} />)
+          buffer.push(<TreeNode key={child.id} el={child} elementStyle={elementStyle} />)
         }
       } else {
-        buffer.push(<TreeNode key={child.id} el={child} elementStyle={elementStyle} filter={filter} />)
+        buffer.push(<TreeNode key={child.id} el={child} elementStyle={elementStyle} />)
       }
     }
     groups.push(...buffer)
@@ -601,14 +599,21 @@ function renderFrameInternal({
 }) {
   // PHASE 20 — child filter closure (fixed-scroll split).
   const cf = childFilter ?? null
+  // PHASE 20 fix (open-item C, live-verified): the filter must also apply to
+  // the TOP-LEVEL children of the rendered frame. Previously cf only ran on
+  // nested children (inside renderInteractive / TreeNode), so both the scroll
+  // layer and the fixed overlay rendered ALL direct children.
+  const topLevelChildren = cf && frame.children ? frame.children.filter(cf) : frame.children
 
   // Interactive mode: attach pointer handlers to every element <g> that has
   // interactions, using per-element hit rects (transparent shapes).
+  // PHASE 20 fix (open-item C): no nested filtering here — the fixed/scroll
+  // split applies only to the direct children of the scrolling frame (the
+  // top-level pre-filter above); descendants render in full.
   const renderInteractive = (el: DesignElement): React.ReactNode => {
     if (!el.visible) return null
     const hasInteractions = (el.interactions?.length ?? 0) > 0
     let children = el.children
-    if (cf && children) children = children.filter(cf)
     if (el.type === 'frame' && hasAutoLayout(el) && el.children) {
       children = calculateAutoLayout(el)
     }
@@ -644,8 +649,8 @@ function renderFrameInternal({
       style={{ display: 'block', ...style }}
     >
       {interactive && onElementPointerDown
-        ? frame.children?.map(renderInteractive)
-        : frame.children?.map((child) => <TreeNode key={child.id} el={child} elementStyle={elementStyle} filter={childFilter} />)}
+        ? topLevelChildren?.map(renderInteractive)
+        : topLevelChildren?.map((child) => <TreeNode key={child.id} el={child} elementStyle={elementStyle} />)}
     </svg>
   )
 }
