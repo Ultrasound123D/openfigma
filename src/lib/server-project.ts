@@ -68,6 +68,8 @@ export interface NormalizedProject {
   name: string
   /** PHASE 7 — project styles (empty array when the server has none) */
   styles: unknown[]
+  /** PHASE 20 — flow starting points (empty array when the server has none) */
+  flowStartingPoints: { frameId: string; name: string }[]
   /** PHASE 16 — comment threads (empty array when the server has none) */
   comments: unknown[]
 }
@@ -96,6 +98,8 @@ export function normalizeServerProject(project: any): NormalizedProject {
     styles: Array.isArray(project.styles) ? project.styles : [],
     // PHASE 16 — comment threads pass through the project load
     comments: Array.isArray(project.comments) ? project.comments : [],
+    // PHASE 20 — flow starting points pass through the project load
+    flowStartingPoints: Array.isArray(project.flowStartingPoints) ? project.flowStartingPoints : [],
   }
 }
 
@@ -120,6 +124,8 @@ export async function pushProjectToServer(state: {
   styles?: unknown[]
   /** PHASE 16 — comment threads ride the whole-project PUT */
   comments?: unknown[]
+  /** PHASE 20 — flow starting points ride the whole-project PUT */
+  flowStartingPoints?: unknown[]
 }): Promise<string | null> {
   if (!state.currentProjectId) return null
   try {
@@ -136,7 +142,8 @@ export async function pushProjectToServer(state: {
         activePageId: state.activePageId,
         ...(state.guides ? { guides: state.guides } : {}),
         ...(state.styles ? { styles: state.styles } : {}),
-        ...(state.comments ? { comments: state.comments } : {}),
+                ...(state.comments ? { comments: state.comments } : {}),
+        ...(state.flowStartingPoints ? { flowStartingPoints: state.flowStartingPoints } : {}),
       }),
     })
     if (!res.ok) return null

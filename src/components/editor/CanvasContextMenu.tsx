@@ -187,6 +187,21 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
         if (n === 0) toast({ title: 'Nothing to flatten', description: 'Select a boolean group (live boolean result).', variant: 'destructive' })
         break
       }
+      // PHASE 20 (PR13) — flow starting points on frames
+      case 'add-flow-start': {
+        if (selectedElement?.type === 'frame') {
+          pushHistory()
+          useEditorStore.getState().addFlowStartingPoint(selectedElement.id)
+        }
+        break
+      }
+      case 'remove-flow-start': {
+        if (selectedElement?.type === 'frame') {
+          pushHistory()
+          useEditorStore.getState().removeFlowStartingPoint(selectedElement.id)
+        }
+        break
+      }
       // PHASE 18 — split vector network into paths (source: split_vector)
       case 'split-vector': {
         pushHistory()
@@ -333,6 +348,18 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
                   Split Vector
                 </ContextMenuItem>
               )}
+              {selectedElement?.type === 'frame' && (() => {
+                const hasStart = useEditorStore.getState().flowStartingPoints.some((f) => f.frameId === selectedElement.id)
+                return hasStart ? (
+                  <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('remove-flow-start')}>
+                    Remove Flow Start
+                  </ContextMenuItem>
+                ) : (
+                  <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('add-flow-start')}>
+                    Add Flow Start ▶
+                  </ContextMenuItem>
+                )
+              })()}
             </>
           )
         })()}

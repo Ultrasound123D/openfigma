@@ -42,6 +42,70 @@ function findInteractionHandlers(root: DesignElement, triggerType: Interaction['
   return handlers
 }
 
+/** PHASE 20 — find a node anywhere under (or including) root. */
+function findNodeInTree(root: DesignElement, id: string): DesignElement | null {
+  if (root.id === id) return root
+  for (const c of root.children || []) {
+    const r = findNodeInTree(c, id)
+    if (r) return r
+  }
+  return null
+}
+
+/** PHASE 20 — absolute offset of a node inside root's coordinate space. */
+function absoluteOffsetIn(root: DesignElement, id: string): { x: number; y: number } {
+  const walk = (el: DesignElement, ox: number, oy: number): { x: number; y: number } | null => {
+    if (el.id === id) return { x: ox + el.x, y: oy + el.y }
+    for (const c of el.children || []) {
+      const r = walk(c, ox + el.x, oy + el.y)
+      if (r) return r
+    }
+    return null
+  }
+  for (const c of root.children || []) {
+    const r = walk(c, root.x, root.y)
+    if (r) return r
+  }
+  return { x: 0, y: 0 }
+}
+
+
+
+/** PHASE 20 (PR11) — deep clone with fresh ids (player-local swap target). */
+function cloneWithNewIds(el: DesignElement, tag: string): DesignElement {
+  const id = `${el.id}-s${tag}`
+  const children = el.children?.map((c) => cloneWithNewIds(c, tag))
+  return { ...el, id, ...(children ? { children } : {}) }
+}
+
+/** PHASE 20 (PR11) — apply the swap map to a frame tree (transient, player-only). */
+function applySwapMap(frame: DesignElement, swaps: Map<string, string>, pool: DesignElement[]): DesignElement {
+  if (swaps.size === 0) return frame
+  const find = (id: string): DesignElement | null => {
+    const walk = (list: DesignElement[]): DesignElement | null => {
+      for (const e of list) {
+        if (e.id === id) return e
+        if (e.children) { const r = walk(e.children); if (r) return r }
+      }
+      return null
+    }
+    return walk(pool)
+  }
+  const tag = Math.random().toString(36).slice(2, 7)
+  const walk = (el: DesignElement): DesignElement => {
+    const targetId = swaps.get(el.id)
+    if (targetId) {
+      const target = find(targetId)
+      if (target) return cloneWithNewIds(target, tag)
+    }
+    if (el.children?.length) {
+      return { ...el, children: el.children.map(walk) }
+    }
+    return el
+  }
+  return { ...frame, children: frame.children?.map(walk) }
+}
+
 export function PrototypePlayer() {
   const {
     isPreviewing,
@@ -65,6 +129,12 @@ export function PrototypePlayer() {
   }>({ key: 0, phase: 'to', animation: null })
   const rafRef = useRef<number | null>(null)
   const dragStateRef = useRef<{ x: number; y: number; fired: boolean } | null>(null)
+  // PHASE 20 — scroll container for scrollable frames + player-local swap map
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const [swapMap, setSwapMap] = React.useState<Map<string, string>>(new Map())
+  const playScaleRef = useRef(1)
+  const viewportRef = useRef({ w: 1920, h: 1080 })
+  const currentFrameRef = useRef<DesignElement | null>(null)
 
   // Viewport tracking
   useEffect(() => {
@@ -82,10 +152,40 @@ export function PrototypePlayer() {
 
   /** Run an interaction: navigate + animate. */
   const runInteraction = useCallback(
-    (interaction: Interaction) => {
+    (interaction: Interaction, sourceEl?: DesignElement) => {
       // url actions don't change player state
       if (interaction.action.type === 'url') {
         previewNavigate(interaction.action)
+        return
+      }
+
+      // PHASE 20 (PR11) — change-to: swap this node for the target (player-local,
+      // transient — never dirties the design; parity with SWAP_STATE).
+      if (interaction.action.type === 'change-to') {
+        if (interaction.action.destinationId && sourceEl) {
+          const srcId = sourceEl.id
+          setSwapMap((m) => { const n = new Map(m); n.set(srcId, interaction.action.destinationId!); return n })
+        }
+        return
+      }
+
+      // PHASE 20 (PR12) — scroll-to: smooth-scroll the frame to reveal the node.
+      if (interaction.action.type === 'scroll-to') {
+        const destId = interaction.action.destinationId
+        const cf = currentFrameRef.current
+        if (destId && scrollRef.current && cf) {
+          const node = findNodeInTree(cf, destId)
+          if (node) {
+            const abs = absoluteOffsetIn(cf, destId)
+            const ps = playScaleRef.current
+            const vp = viewportRef.current
+            scrollRef.current.scrollTo({
+              top: Math.max(0, abs.y * ps - vp.h * 0.35),
+              left: Math.max(0, abs.x * ps - vp.w * 0.35),
+              behavior: 'smooth',
+            })
+          }
+        }
         return
       }
 
@@ -163,9 +263,9 @@ export function PrototypePlayer() {
   useEffect(() => {
     if (!isPreviewing || !currentFrame) return
     const timers: ReturnType<typeof setTimeout>[] = []
-    for (const { interaction } of findInteractionHandlers(currentFrame, 'delay')) {
+    for (const { el: delEl, interaction } of findInteractionHandlers(currentFrame, 'delay')) {
       if (interaction.trigger.type === 'delay') {
-        timers.push(setTimeout(() => runInteraction(interaction), Math.max(0, interaction.trigger.timeoutMs ?? 0)))
+        timers.push(setTimeout(() => runInteraction(interaction, delEl), Math.max(0, interaction.trigger.timeoutMs ?? 0)))
       }
     }
     return () => timers.forEach(clearTimeout)
@@ -185,10 +285,10 @@ export function PrototypePlayer() {
       }
       if (!currentFrame) return
       const key = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase()
-      for (const { interaction } of findInteractionHandlers(currentFrame, 'keypress')) {
+      for (const { el: keyEl, interaction } of findInteractionHandlers(currentFrame, 'keypress')) {
         if (interaction.trigger.type === 'keypress' && (interaction.trigger.keys || []).includes(key)) {
           e.preventDefault()
-          runInteraction(interaction)
+          runInteraction(interaction, keyEl)
         }
       }
     }
@@ -218,7 +318,7 @@ export function PrototypePlayer() {
           if (!st || st.fired) return
           if (Math.hypot(ev.clientX - st.x, ev.clientY - st.y) > 6) {
             st.fired = true
-            runInteraction(dragHandlers[0])
+            runInteraction(dragHandlers[0], el)
             cleanup()
           }
         }
@@ -239,7 +339,7 @@ export function PrototypePlayer() {
       }
 
       if (clickHandlers.length > 0) {
-        runInteraction(clickHandlers[0])
+        runInteraction(clickHandlers[0], el)
       }
     },
     [runInteraction]
@@ -248,7 +348,7 @@ export function PrototypePlayer() {
   const handleElementHover = useCallback(
     (el: DesignElement) => {
       const hover = (el.interactions || []).find((i) => i.trigger.type === 'hover')
-      if (hover) runInteraction(hover)
+      if (hover) runInteraction(hover, el)
     },
     [runInteraction]
   )
@@ -258,10 +358,28 @@ export function PrototypePlayer() {
     (el: DesignElement, kind: 'enter' | 'leave' | 'down' | 'up') => {
       const map = { enter: 'mouse-enter', leave: 'mouse-leave', down: 'mouse-down', up: 'mouse-up' } as const
       const ix = (el.interactions || []).find((i) => i.trigger.type === map[kind])
-      if (ix) runInteraction(ix)
+      if (ix) runInteraction(ix, el)
     },
     [runInteraction]
   )
+
+  // PHASE 20 — display frame with the change-to swap map applied (player-local).
+  // Null-safe so the hook runs before any early return.
+  const displayFrame = useMemo(
+    () => (currentFrame ? applySwapMap(currentFrame, swapMap, elements) : null),
+    [currentFrame, swapMap, elements]
+  )
+  // PHASE 20 — keep refs in sync for action handlers (scroll-to).
+  // Computed from the same values the render uses (null-safe currentFrame).
+  useEffect(() => {
+    const cf = currentFrame
+    if (!cf) return
+    const widthFit = (viewport.w * 0.85) / Math.max(cf.width, 1)
+    const scale0 = fitScale(cf, viewport.w, viewport.h)
+    playScaleRef.current = cf.height * widthFit > viewport.h ? widthFit : scale0
+    viewportRef.current = viewport
+    currentFrameRef.current = cf
+  }, [currentFrame, viewport])
 
   if (!isPreviewing) return null
 
@@ -280,6 +398,21 @@ export function PrototypePlayer() {
 
   const scale = fitScale(currentFrame, viewport.w, viewport.h)
   const t = transitionState
+
+  // PHASE 20 (PR10) — scrolling mode: a frame taller than the viewport (after
+  // width-fit) becomes a scrollable frame (source: fixedScrolling). Fixed
+  // children (scrollBehavior === 'FIXED_WHEN_CHILD_OF_SCROLLING_FRAME', only
+  // while this frame is scrollable — parity fixedScrollingDisabled) render in
+  // a non-scrolling overlay layer.
+  const widthFit = (viewport.w * 0.85) / Math.max(currentFrame.width, 1)
+  const scrolling = currentFrame.height * widthFit > viewport.h
+  const playScale = scrolling ? widthFit : scale
+  const fixedChildren = (currentFrame.children || []).filter(
+    (c) => c.scrollBehavior === 'FIXED_WHEN_CHILD_OF_SCROLLING_FRAME'
+  )
+  const anyFixed = scrolling && fixedChildren.length > 0
+
+
   const enterStyle: React.CSSProperties =
     t.phase === 'from' && t.animation
       ? enterFrom(t.animation, t.animation.direction ?? 'right', { width: viewport.w, height: viewport.h })
@@ -301,27 +434,90 @@ export function PrototypePlayer() {
 
   return (
     <div className="fixed inset-0 z-[10000] bg-[#141414] select-none" data-testid="prototype-player">
-      {/* Base frame */}
+      {/* Base frame — PHASE 20: scrollable frames render a scrolling layer
+          (fixed children excluded) + a pinned overlay layer (fixed only).
+          displayFrame applies the player-local change-to swap map. */}
       <div className="absolute inset-0 flex items-center justify-center overflow-hidden">
-        <div
-          key={`base-${previewFrameId}-${t.key}`}
-          style={{
-            transform: `scale(${scale})`,
-            transformOrigin: 'center center',
-            position: 'absolute',
-            ...enterStyle,
-            ...activeStyle,
-          }}
-        >
-          <FrameRenderer
-            frame={currentFrame}
-            interactive={overlayStack.length === 0}
-            onElementPointerDown={handleElementPointerDown}
-            onElementHover={handleElementHover}
-            onElementEvent={handleElementEvent}
-            elementStyle={smartElementStyle}
-          />
-        </div>
+        {scrolling ? (
+          <div
+            className="relative"
+            style={{
+              width: Math.round(currentFrame.width * playScale),
+              height: Math.min(Math.round(currentFrame.height * playScale), viewport.h),
+            }}
+            onWheel={(e) => { if (!scrollRef.current) return }}
+          >
+            <div ref={scrollRef} className="absolute inset-0 overflow-auto" data-testid="player-scroll">
+              <div
+                key={`base-${previewFrameId}-${t.key}`}
+                style={{
+                  transform: `scale(${playScale})`,
+                  transformOrigin: 'top left',
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  ...enterStyle,
+                  ...activeStyle,
+                }}
+              >
+                <FrameRenderer
+                  frame={displayFrame!}
+                  interactive={overlayStack.length === 0}
+                  onElementPointerDown={handleElementPointerDown}
+                  onElementHover={handleElementHover}
+                  onElementEvent={handleElementEvent}
+                  elementStyle={smartElementStyle}
+                  childFilter={anyFixed ? (c) => c.scrollBehavior !== 'FIXED_WHEN_CHILD_OF_SCROLLING_FRAME' : undefined}
+                />
+              </div>
+            </div>
+            {anyFixed && (
+              <div className="absolute inset-0 overflow-hidden" style={{ pointerEvents: 'none' }}>
+                <div
+                  style={{
+                    transform: `scale(${playScale})`,
+                    transformOrigin: 'top left',
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: currentFrame.width,
+                    height: currentFrame.height,
+                  }}
+                >
+                  <FrameRenderer
+                    frame={currentFrame}
+                    interactive={overlayStack.length === 0}
+                    onElementPointerDown={handleElementPointerDown}
+                    onElementHover={handleElementHover}
+                    onElementEvent={handleElementEvent}
+                    elementStyle={smartElementStyle}
+                    childFilter={(c) => c.scrollBehavior === 'FIXED_WHEN_CHILD_OF_SCROLLING_FRAME'}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div
+            key={`base-${previewFrameId}-${t.key}`}
+            style={{
+              transform: `scale(${scale})`,
+              transformOrigin: 'center center',
+              position: 'absolute',
+              ...enterStyle,
+              ...activeStyle,
+            }}
+          >
+            <FrameRenderer
+              frame={displayFrame!}
+              interactive={overlayStack.length === 0}
+              onElementPointerDown={handleElementPointerDown}
+              onElementHover={handleElementHover}
+              onElementEvent={handleElementEvent}
+              elementStyle={smartElementStyle}
+            />
+          </div>
+        )}
       </div>
 
       {/* Overlay stack (innermost on top) */}

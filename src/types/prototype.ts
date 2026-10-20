@@ -46,10 +46,16 @@ export type PrototypeActionType =
   | 'close-overlay'
   | 'url'
   | 'back'
+  /** PHASE 20 (PR11) — swap this node for another (component/variant).
+   *  Source: CHANGE_TO → SWAP_STATE mapping + proto.variant_actions.change_to. */
+  | 'change-to'
+  /** PHASE 20 (PR12) — smooth-scroll the containing frame to reveal the node.
+   *  Source: navigationType SCROLL_TO ("SCROLL_TO"===e.action). */
+  | 'scroll-to'
 
 export interface PrototypeAction {
   type: PrototypeActionType
-  /** navigate / open-overlay: destination frame id (null = not wired yet) */
+  /** navigate / open-overlay / change-to / scroll-to: destination (frame for navigate; any node for change-to/scroll-to) */
   destinationId?: string | null
   /** open-overlay */
   background?: OverlayBackground
@@ -119,6 +125,9 @@ export const ACTION_LABELS: Record<PrototypeActionType, string> = {
   'close-overlay': 'Close overlay',
   url: 'Open URL',
   back: 'Back',
+  // PHASE 20 — change-to (SWAP_STATE) + scroll-to (SCROLL_TO)
+  'change-to': 'Change to',
+  'scroll-to': 'Scroll to',
 }
 
 export const ANIMATION_LABELS: Record<PrototypeAnimationType, string> = {

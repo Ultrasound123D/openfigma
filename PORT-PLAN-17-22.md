@@ -86,7 +86,7 @@ evidence, not opinion.
   at natural size centered on point; drag places scaled; sequential for N>1;
   Esc cancels rest. Matches `click_or_drag_to_place`.
 
-### PHASE 20 — Prototype completion
+### PHASE 20 — Prototype completion ✅ (2026-10-20; fixed-overlay isolation + change-to visual marked OPEN — see PROGRESS.md)
 - **PR10 Fixed scrolling**: node `scrollBehavior: 'SCROLLS' |
   'FIXED_WHEN_CHILD_OF_SCROLLING_FRAME'` + player honors fixed children when
   parent scrolls; panel toggle in Prototype section (disabled when not in

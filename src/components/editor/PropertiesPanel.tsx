@@ -1011,6 +1011,22 @@ export function PropertiesPanel() {
             </div>
           )}
 
+          {/* PHASE 20 (PR10) — scroll behavior inside scrolling frames
+              (source: scrollBehavior FIXED_WHEN_CHILD_OF_SCROLLING_FRAME).
+              Effective during playback when the containing frame scrolls. */}
+          {element.type !== 'frame' && element.type !== 'group' && (
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-[#888] w-14 shrink-0">Fixed</span>
+              <button
+                onClick={() => { pushHistory(); updateElement(element.id, element.scrollBehavior === 'FIXED_WHEN_CHILD_OF_SCROLLING_FRAME' ? { scrollBehavior: 'SCROLLS' } : { scrollBehavior: 'FIXED_WHEN_CHILD_OF_SCROLLING_FRAME' }) }}
+                className={`h-5 px-2 text-[10px] rounded-sm border ${element.scrollBehavior === 'FIXED_WHEN_CHILD_OF_SCROLLING_FRAME' ? 'bg-[#0D99FF]/20 border-[#0D99FF] text-[#7FBBFF]' : 'bg-[#1E1E1E] border-[#383838] text-[#999] hover:border-[#0D99FF]'}`}
+                title="Fixed when parent frame scrolls (stays pinned during playback)"
+              >
+                {element.scrollBehavior === 'FIXED_WHEN_CHILD_OF_SCROLLING_FRAME' ? 'Fixed when scrolling ✓' : 'Scrolls with frame'}
+              </button>
+            </div>
+          )}
+
           {/* PHASE 17 — Arc tool (ellipse): Start / Sweep / Ratio
               (source: transform_panel arcToolStart / arcToolSweep / arcToolRatio) */}
           {isEllipse && (

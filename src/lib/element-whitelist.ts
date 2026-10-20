@@ -27,6 +27,8 @@ export const ELEMENT_FIELD_WHITELIST = [
   // structure
   'children', 'autoLayout', 'clipContent', 'constraints', 'constraintsEdited',
   'booleanOperation', 'booleanSourceIds', 'booleanContours', 'isMask',
+  // PHASE 20 — node scroll behavior (FIXED_WHEN_CHILD_OF_SCROLLING_FRAME)
+  'scrollBehavior',
   // PHASE 12 — auto layout child sizing + positioning + min/max
   'layoutSizingH', 'layoutSizingV', 'layoutPositioning',
   'minWidth', 'maxWidth', 'minHeight', 'maxHeight',

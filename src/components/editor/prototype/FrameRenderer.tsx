@@ -420,15 +420,21 @@ function Shape({ el }: { el: DesignElement }) {
 function TreeNode({
   el,
   elementStyle,
+  filter,
 }: {
   el: DesignElement
   /** Per-element inline style override (used by smart-animate tweens). */
   elementStyle?: (el: DesignElement) => React.CSSProperties | undefined
+  /** PHASE 20 — render-pass child filter (fixed-scroll split). */
+  filter?: (el: DesignElement) => boolean
 }) {
   if (!el.visible) return null
 
+  const activeChildFilter = filter ?? null
   const isContainer = (el.type === 'frame' || el.type === 'group' || el.type === 'section' || el.type === 'component-set') && el.children?.length
   let children = el.children
+  // PHASE 20 — apply the render-pass child filter (fixed-scroll split)
+  if (activeChildFilter && children) children = children.filter(activeChildFilter)
   if (el.type === 'frame' && hasAutoLayout(el) && el.children) {
     children = calculateAutoLayout(el)
   }
@@ -455,16 +461,16 @@ function TreeNode({
               </defs>
               <g clipPath={`url(#${clipId})`}>
                 {buffer}
-                <TreeNode key={child.id} el={child} elementStyle={elementStyle} />
+                <TreeNode key={child.id} el={child} elementStyle={elementStyle} filter={filter} />
               </g>
             </g>
           )
           buffer = []
         } else {
-          buffer.push(<TreeNode key={child.id} el={child} elementStyle={elementStyle} />)
+          buffer.push(<TreeNode key={child.id} el={child} elementStyle={elementStyle} filter={filter} />)
         }
       } else {
-        buffer.push(<TreeNode key={child.id} el={child} elementStyle={elementStyle} />)
+        buffer.push(<TreeNode key={child.id} el={child} elementStyle={elementStyle} filter={filter} />)
       }
     }
     groups.push(...buffer)
@@ -547,6 +553,7 @@ export function FrameRenderer({
   onElementEvent,
   interactive = false,
   elementStyle,
+  childFilter,
 }: {
   frame: DesignElement
   className?: string
@@ -560,13 +567,48 @@ export function FrameRenderer({
   interactive?: boolean
   /** Per-element inline style override (smart-animate tweens). */
   elementStyle?: (el: DesignElement) => React.CSSProperties | undefined
+  /** PHASE 20 — render only children matching this predicate (fixed-scroll
+   *  split: the player renders one scrolling layer skipping fixed children
+   *  and one overlay layer with only fixed children). */
+  childFilter?: (el: DesignElement) => boolean
 }) {
+  // PHASE 20 — child filter threaded explicitly (no context: hooks rules
+  // forbid useContext inside the non-component internal walker; module-level
+  // mutable state breaks under lazy rendering — both proven live).
+  return renderFrameInternal({ frame, className, style, onElementPointerDown, onElementHover, onElementEvent, interactive, elementStyle, childFilter })
+}
+
+function renderFrameInternal({
+  frame,
+  className,
+  style,
+  onElementPointerDown,
+  onElementHover,
+  onElementEvent,
+  interactive = false,
+  elementStyle,
+  childFilter,
+}: {
+  frame: DesignElement
+  className?: string
+  style?: React.CSSProperties
+  onElementPointerDown?: (el: DesignElement, e: React.PointerEvent) => void
+  onElementHover?: (el: DesignElement) => void
+  onElementEvent?: (el: DesignElement, kind: 'enter' | 'leave' | 'down' | 'up', e: React.PointerEvent) => void
+  interactive?: boolean
+  elementStyle?: (el: DesignElement) => React.CSSProperties | undefined
+  childFilter?: (el: DesignElement) => boolean
+}) {
+  // PHASE 20 — child filter closure (fixed-scroll split).
+  const cf = childFilter ?? null
+
   // Interactive mode: attach pointer handlers to every element <g> that has
   // interactions, using per-element hit rects (transparent shapes).
   const renderInteractive = (el: DesignElement): React.ReactNode => {
     if (!el.visible) return null
     const hasInteractions = (el.interactions?.length ?? 0) > 0
     let children = el.children
+    if (cf && children) children = children.filter(cf)
     if (el.type === 'frame' && hasAutoLayout(el) && el.children) {
       children = calculateAutoLayout(el)
     }
@@ -603,7 +645,7 @@ export function FrameRenderer({
     >
       {interactive && onElementPointerDown
         ? frame.children?.map(renderInteractive)
-        : frame.children?.map((child) => <TreeNode key={child.id} el={child} elementStyle={elementStyle} />)}
+        : frame.children?.map((child) => <TreeNode key={child.id} el={child} elementStyle={elementStyle} filter={childFilter} />)}
     </svg>
   )
 }

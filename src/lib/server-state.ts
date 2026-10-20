@@ -84,6 +84,8 @@ export interface ProjectState {
   pages: Page[]
   activePageId: string
   guides: any[]
+  /** PHASE 20 — flow starting points (whole-project round-trip) */
+  flowStartingPoints?: any[]
   createdAt: string
   updatedAt: string
 }

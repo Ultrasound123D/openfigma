@@ -2055,6 +2055,8 @@ export function Canvas() {
                 <CommentComposerInput />
               </div>
             )}
+            {/* PHASE 20 (PR13) — flow starting point chips */}
+            <FlowStartBadges toScreen={toScreen} />
           </>
         )
       })()}
@@ -2155,6 +2157,65 @@ function CommentReplyInput({ commentId }: { commentId: string }) {
       />
       <button onClick={submit} className="h-6 px-2 rounded bg-[#0D99FF] text-white text-[10px]">Send</button>
     </div>
+  )
+}
+
+
+/** PHASE 20 (PR13) — flow starting point chips above frames (source:
+ * getFlowStartingPoints + flowStartingPointNameInput). Double-click renames. */
+function FlowStartBadges({ toScreen }: { toScreen: (x: number, y: number) => { left: number; top: number } }) {
+  const flowStartingPoints = useEditorStore((s) => s.flowStartingPoints)
+  const elements = useEditorStore((s) => s.elements)
+  const [renaming, setRenaming] = React.useState<{ frameId: string; value: string } | null>(null)
+  if (!flowStartingPoints.length) return null
+  const frames = elements.filter((e) => e.type === 'frame')
+  return (
+    <>
+      {flowStartingPoints.map((f) => {
+        const frame = frames.find((fr) => fr.id === f.frameId)
+        if (!frame) return null
+        const pos = toScreen(frame.x, frame.y)
+        const chipW = Math.max(64, 14 + f.name.length * 6)
+        return (
+          <div
+            key={f.frameId}
+            className="absolute z-30 flex items-center gap-1 select-none"
+            style={{ left: pos.left, top: pos.top - 24, pointerEvents: 'auto' }}
+            onDoubleClick={(e) => { e.stopPropagation(); setRenaming({ frameId: f.frameId, value: f.name }) }}
+            title="Flow starting point — double-click to rename"
+            data-testid={`flow-start-${f.name}`}
+          >
+            {renaming && renaming.frameId === f.frameId ? (
+              <input
+                autoFocus
+                value={renaming.value}
+                onChange={(e) => setRenaming({ frameId: f.frameId, value: e.target.value })}
+                onBlur={() => { useEditorStore.getState().renameFlowStartingPoint(f.frameId, renaming.value.trim() || f.name); setRenaming(null) }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { useEditorStore.getState().renameFlowStartingPoint(f.frameId, renaming.value.trim() || f.name); setRenaming(null) }
+                  if (e.key === 'Escape') setRenaming(null)
+                }}
+                className="h-5 px-1 text-[10px] rounded border border-[#0D99FF] bg-[#1E1E1E] text-[#DDD] outline-none w-28"
+              />
+            ) : (
+              <>
+                <span
+                  className="h-5 px-1.5 flex items-center text-[10px] rounded border border-[#0D99FF] bg-[#0D99FF]/20 text-[#7FBBFF] cursor-default"
+                  style={{ fontFamily: 'var(--fig-font-family-mono)' }}
+                >
+                  ▶ {f.name}
+                </span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); useEditorStore.getState().removeFlowStartingPoint(f.frameId) }}
+                  className="h-5 w-5 flex items-center justify-center text-[10px] rounded border border-[#383838] bg-[#1E1E1E] text-[#F44336] hover:border-[#F44336]"
+                  title="Remove starting point"
+                >✕</button>
+              </>
+            )}
+          </div>
+        )
+      })}
+    </>
   )
 }
 

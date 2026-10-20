@@ -468,6 +468,9 @@ export interface DesignElement {
   /** PHASE 19 (T7) — hyperlink text markers (source: text marker type "HYPERLINK",
    *  1517-f945…). Char ranges into textContent. */
   links?: { start: number; end: number; url: string }[]
+  /** PHASE 20 (PR10) — node scroll behavior inside a scrolling frame
+   *  (source: scrollBehavior FIXED_WHEN_CHILD_OF_SCROLLING_FRAME + isAncestorFixed). */
+  scrollBehavior?: 'SCROLLS' | 'FIXED_WHEN_CHILD_OF_SCROLLING_FRAME'
 }
 
 export interface Page {
@@ -823,6 +826,13 @@ interface EditorState {
   exitFrame: () => void
   moveElementToFrame: (elementId: string, frameId: string) => void
   moveElementOutOfFrame: (elementId: string) => void
+
+  // PHASE 20 (PR13) — flow starting points (source: getFlowStartingPoints +
+  // flowStartingPointNameInput; presentation starts at the first one).
+  flowStartingPoints: { frameId: string; name: string }[]
+  addFlowStartingPoint: (frameId: string, name?: string) => void
+  removeFlowStartingPoint: (frameId: string) => void
+  renameFlowStartingPoint: (frameId: string, name: string) => void
 
   // Helper
   getElementById: (id: string) => DesignElement | null
@@ -1476,6 +1486,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   activeCommentId: null,
   composerPos: null,
   guides: [],
+  // PHASE 20 (PR13) — flow starting points
+  flowStartingPoints: [],
   leftTab: 'file',
   rightTab: 'design',
   editorMode: 'design',
@@ -2544,6 +2556,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         selectedElementIds: [],
         styles: (normalized.styles || []) as EditorState['styles'],
         comments: (normalized.comments || []) as EditorState['comments'],
+        flowStartingPoints: (normalized.flowStartingPoints || []) as EditorState['flowStartingPoints'],
         history: [{ elements: deepCloneElements(normalized.activePageElements), selectedElementIds: [] }],
         historyIndex: 0,
         isDirty: false,
@@ -3033,14 +3046,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   startPreview: (frameId) =>
     set((state) => {
-      // Default: the selected top-level frame, else the first frame on the page.
-      // state.elements holds top-level elements only (children are nested),
-      // so this filter already excludes nested frames.
+      // Default: the flow's first starting point (PHASE 20 parity with
+      // getEffectivePrototypeStartNodeId), else selected frame, else first frame.
       const frames = state.elements.filter((el) => el.type === 'frame')
       const selectedFrame = state.selectedElementIds
         .map((id) => state.elements.find((el) => el.id === id))
         .find((el) => el && el.type === 'frame')
-      const start = frameId ?? (selectedFrame && selectedFrame.type === 'frame' ? selectedFrame.id : null) ?? frames[0]?.id ?? null
+      const flowStart = state.flowStartingPoints?.find((f) => frames.some((fr) => fr.id === f.frameId))
+      const start = frameId ?? flowStart?.frameId ?? (selectedFrame && selectedFrame.type === 'frame' ? selectedFrame.id : null) ?? frames[0]?.id ?? null
       if (!start) return state
       return {
         isPreviewing: true,
@@ -3361,6 +3374,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   addGuide: (guide) => set((state) => ({ guides: [...state.guides, guide], isDirty: true })),
   removeGuide: (id) => set((state) => ({ guides: state.guides.filter(g => g.id !== id), isDirty: true })),
   clearGuides: () => set({ guides: [], isDirty: true }),
+
+  // PHASE 20 (PR13) — flow starting points
+  addFlowStartingPoint: (frameId, name) =>
+    set((state) => {
+      if (state.flowStartingPoints.some((f) => f.frameId === frameId)) return state
+      return {
+        flowStartingPoints: [...state.flowStartingPoints, { frameId, name: name || `Flow ${state.flowStartingPoints.length + 1}` }],
+        isDirty: true,
+      }
+    }),
+  removeFlowStartingPoint: (frameId) =>
+    set((state) => ({ flowStartingPoints: state.flowStartingPoints.filter((f) => f.frameId !== frameId), isDirty: true })),
+  renameFlowStartingPoint: (frameId, name) =>
+    set((state) => ({ flowStartingPoints: state.flowStartingPoints.map((f) => (f.frameId === frameId ? { ...f, name } : f)), isDirty: true })),
 
   // Save/Load
   saveToFile: async () => {

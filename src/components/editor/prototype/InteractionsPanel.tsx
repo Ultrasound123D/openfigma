@@ -63,6 +63,19 @@ export function InteractionsPanel({ element }: { element: DesignElement }) {
   const { elements, addInteraction, updateInteraction, removeInteraction, pushHistory, startPreview } = useEditorStore()
   const interactions = element.interactions || []
   const frames = elements.filter((el) => el.type === 'frame')
+  // PHASE 20 — flat node list for change-to / scroll-to targets (any node,
+  // including nested children; excludes the host element itself).
+  const flatNodes: DesignElement[] = (() => {
+    const out: DesignElement[] = []
+    const walk = (list: DesignElement[]) => {
+      for (const el of list) {
+        if (el.id !== element.id) out.push(el)
+        if (el.children) walk(el.children)
+      }
+    }
+    walk(elements)
+    return out
+  })()
   const containingFrame = topLevelFrameOf(elements, element)
 
   const handleAdd = () => {
@@ -195,6 +208,8 @@ export function InteractionsPanel({ element }: { element: DesignElement }) {
                     const action: Interaction['action'] =
                       type === 'navigate' ? { type, destinationId: ix.action.destinationId ?? null } :
                       type === 'open-overlay' ? { type, destinationId: ix.action.destinationId ?? null, background: { type: 'none' }, closeOnClickOutside: true } :
+                      // PHASE 20 — change-to / scroll-to carry a destination too
+                      type === 'change-to' || type === 'scroll-to' ? { type, destinationId: ix.action.destinationId ?? null } :
                       type === 'url' ? { type, url: 'https://', newTab: true } :
                       { type }
                     patch(ix.id, { action })
@@ -209,8 +224,8 @@ export function InteractionsPanel({ element }: { element: DesignElement }) {
             </Field>
 
             {/* Destination */}
-            {(ix.action.type === 'navigate' || ix.action.type === 'open-overlay') && (
-              <Field label="Target frame">
+            {(ix.action.type === 'navigate' || ix.action.type === 'open-overlay' || ix.action.type === 'change-to' || ix.action.type === 'scroll-to') && (
+              <Field label={ix.action.type === 'change-to' ? 'Change to (node/component)' : ix.action.type === 'scroll-to' ? 'Scroll to (node)' : 'Target frame'}>
                 <select
                   value={ix.action.destinationId ?? ''}
                   onChange={(e) =>
@@ -221,7 +236,7 @@ export function InteractionsPanel({ element }: { element: DesignElement }) {
                   className={selectCls}
                 >
                   <option value="">None (click does nothing)</option>
-                  {frames.map((f) => (
+                  {(ix.action.type === 'change-to' || ix.action.type === 'scroll-to' ? flatNodes : frames).map((f) => (
                     <option key={f.id} value={f.id}>{f.name}</option>
                   ))}
                 </select>
