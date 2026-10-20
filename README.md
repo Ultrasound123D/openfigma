@@ -8,17 +8,19 @@
 
 ---
 
-## ✨ What's new in v0.4.0 — complete port (phases 0–16)
+## ✨ What's new in v0.5.0 — terminal audit wave (phases 17–23)
 
-Final wave closing the full port. On top of v0.2.0 (tokens, prototype, export, import) and v0.3.0 (boolean/masks, styles, layout grids, constraints, text, precision tools):
+Final wave from the terminal audit — three fresh search surfaces over the source corpus (every remaining gap closed, every rejection documented with evidence). On top of v0.4.0 (auto layout, text depth, full gradients, Section/Table/Sticky, comments):
 
 | Phase | Delivered |
 |---|---|
-| 12 — Auto Layout (full) | wrap, FIXED/HUG/FILL sizing for frames **and** children, min/max, baseline alignment, absolute children, reorder-on-drop, Figma-parity panel |
-| 13 — Text depth | vertical align, justified word distribution, ordered/unordered lists with hanging indent + unified POST/PUT element whitelist (security fix) |
-| 14 — Full gradients | angular (real conic pie slices) + diamond (exact \|dx\|+\|dy\| per-quadrant 45° linear) + fix latent fill-pattern index bug |
-| 15 — New elements | Section (full container), Table (cell model with double-click editing), Sticky notes |
-| 16 — Collaboration & polish | comments system (pins, threads, resolve), corner smoothing (cubic Bézier 0.5523 → 1.29 squircle), separate mouse-enter/leave/down/up triggers, zoom shortcuts Shift+1/0/2 |
+| 17 — Paint & vector | pattern paint (tiled fills), outline stroke, flatten, arc tool (donut geometry) |
+| 18 — Vector editing | vector edit on parametric shapes (exact Bézier conversion), split vector network |
+| 19 — Text advances | text on path (any target + offset slider), hyperlink runs (rendered, clickable in the player), emoji picker, place-image queue mode |
+| 20 — Prototype advances | flow starting points (named, first-start precedence), fixed-when-scrolling overlay, Change To, Scroll To |
+| 21 — Edit & view parity | paste-over, select-similar/inverse (8 criteria), find & replace (all pages), outlines mode (+hidden/bounds), pixel preview (+retina) |
+| 22 — Collaboration | multiplayer presence (SSE cursors/viewport/selection), version history (named + autosave, restore-as-new-version), published libraries (subscribe + master/instance insert) |
+| 23 — Audit wave | copy as PNG/SVG/text/layer-name, copy/paste properties, paste here, unlock all, resize-to-fit, math in inputs, frame selection, nudge amounts, shortcuts modal (⌘/), show-comments toggle, add variant |
 
 All phases closed with `tsc --noEmit` + `eslint` + `next build` at zero errors, live browser verification and VLM-checked screenshots.
 
@@ -26,7 +28,7 @@ All phases closed with `tsc --noEmit` + `eslint` + `next build` at zero errors, 
 
 ## 📸 Screenshots
 
-Curated captures — live-verified in the browser and VLM-checked. Only the significant ones live in `img/`; the full phase-by-phase set (30 shots) is in `download/`.
+Curated captures — live-verified in the browser and VLM-checked. Only the significant ones live in `img/`; the full phase-by-phase set (28 shots) is in `download/`.
 
 **The everyday surface**
 
@@ -68,6 +70,48 @@ Curated captures — live-verified in the browser and VLM-checked. Only the sign
 <p align="center">
   <img src="img/prototype.png" alt="Prototype" width="49%">
   <img src="img/section-table-sticky.png" alt="Section / Table / Sticky" width="49%">
+</p>
+
+**Wave 2 — paint & vector tools**
+
+<p align="center">
+  <img src="img/paint-tools.png" alt="Pattern paint · outline stroke · arc · flatten" width="49%">
+  <img src="img/vector-edit.png" alt="Vector edit (exact Bézier conversion)" width="49%">
+</p>
+
+**Text on path & prototype depth**
+
+<p align="center">
+  <img src="img/text-on-path.png" alt="Text on path + hyperlink runs" width="49%">
+  <img src="img/prototype-player.png" alt="Fixed-scroll player + change-to" width="49%">
+</p>
+
+**Power editing & view modes**
+
+<p align="center">
+  <img src="img/find-replace.png" alt="Find & replace (all pages)" width="49%">
+  <img src="img/outlines-mode.png" alt="Outlines mode" width="49%">
+</p>
+
+**View parity & multiplayer**
+
+<p align="center">
+  <img src="img/pixel-preview.png" alt="Pixel preview (+retina)" width="49%">
+  <img src="img/presence.png" alt="Multiplayer presence" width="49%">
+</p>
+
+**Version history & libraries**
+
+<p align="center">
+  <img src="img/version-history.png" alt="Version history" width="49%">
+  <img src="img/libraries.png" alt="Published libraries" width="49%">
+</p>
+
+**Polish wave (shortcuts & variants)**
+
+<p align="center">
+  <img src="img/shortcuts.png" alt="Shortcuts modal (⌘/)" width="49%">
+  <img src="img/add-variant.png" alt="Add variant" width="49%">
 </p>
 
 ---
@@ -135,7 +179,10 @@ Everything on the canvas is a `DesignElement` — a tree linked by `parentId`:
 - **Auto Layout** — direction, gap, padding, alignment, sizing modes
 - **Components & variants** — create/instance/detach, document colors and fonts panels
 - **Export** — PNG / JPG / SVG / PDF / WEBP via `ExportPanel` (per-element, scale 1x/2x/4x, adjustable quality for JPG/WEBP) or the API
-- **Prototype system** — interaction model with 5 triggers (click/hover/drag/keypress/delay) × 5 actions (navigate/open-overlay/close-overlay/url/back) × 8 animations incl. **Smart Animate** (name-path matching between frames), a fullscreen player (`▶` in the TopBar, Esc to exit, back stack) and a full interactions builder in the Prototype tab
+- **Prototype system** — interaction model with 9 triggers (click/hover/drag/keypress/delay + separate mouse enter/leave/down/up) × 7 actions (navigate/open-overlay/close-overlay/url/back/change-to/scroll-to) × 8 animations incl. **Smart Animate** (name-path matching between frames), flow starting points, fixed-when-scrolling overlays, a fullscreen player (`▶` in the TopBar, Esc to exit, back stack) and a full interactions builder in the Prototype tab
+- **Text on path & hyperlinks** — attach text to any path/ellipse/line target with an offset slider; hyperlink runs render underlined and open in the prototype player
+- **Find & replace** — across all pages, with match-case / whole-word / layer-name options and a results list that jumps to each hit
+- **Collaboration** — multiplayer presence (SSE cursors/viewport/selection), version history (named + autosave snapshots, restore-as-new-version), published libraries (subscribe + master/instance insert)
 - **Import** — images (picker or unified drag & drop), SVG files parsed with DOMParser into an editable `DesignElement` tree (not a flat image), and project JSON (replace or merge)
 - **Multi-page system**, CSS code generation in the Inspect tab
 - **Undo/Redo** — snapshot history pushed from 25+ call sites
@@ -281,7 +328,7 @@ The agent will chain the tools automatically:
 ├── src/data/          demo-design.ts (VidVerse demo — via File menu)
 ├── mcp-server/        MCP server (52 tools) + config
 ├── prisma/            schema (optional)
-└── img/               sign.jpeg (cover) + 12 curated screenshots
+└── img/               sign.jpeg (cover) + 24 curated screenshots
 ```
 
 ---
