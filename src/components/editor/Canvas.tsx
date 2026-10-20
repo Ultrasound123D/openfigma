@@ -26,6 +26,10 @@ import { smoothedRectPath } from '@/lib/smooth-corners'
 // PHASE 17 — ellipse arc geometry + live boolean group baked geometry
 import { ellipseShapePath, arcIsEvenOdd } from '@/lib/arc'
 import { booleanGroupPathD } from '@/lib/boolean-ops'
+// PHASE 19 — text on path + hyperlink runs
+import { onPathTargetD, onPathTargetTransform, splitLineIntoRuns, LINK_COLOR } from '@/lib/text-on-path'
+// PHASE 19 (T8) — emoji picker (comments composer)
+import { EmojiPickerButton } from './EmojiPicker'
 
 // Generate SVG defs for gradients, filters, clip paths, and image patterns
 function generateSVGDefs(elements: DesignElement[], zoom: number): React.ReactNode {
@@ -532,6 +536,40 @@ const CanvasElement = React.memo(function CanvasElement({
         const letterSpacing = el.letterSpacing || 0
         const fontStyle = el.fontStyle || 'normal'
         const textDecoration = el.textDecoration || 'none'
+
+        // PHASE 19 (T6) — text on path: renders along the referenced element's
+        // geometry (SVG <textPath>). Takes precedence over box layout.
+        if (el.onPathId) {
+          const target = findElementInList(useEditorStore.getState().elements, el.onPathId)
+          if (target) {
+            const d = onPathTargetD(target)
+            if (d) {
+              const tpId = `tp-${el.id}`
+              return (
+                <g style={style}>
+                  <defs>
+                    <path id={tpId} d={d} transform={onPathTargetTransform(target, el)} />
+                  </defs>
+                  <text
+                    fontSize={fontSize}
+                    fontWeight={fontWeight}
+                    fontFamily={fontFamily}
+                    fontStyle={fontStyle}
+                    letterSpacing={letterSpacing}
+                    fill={textColor}
+                    opacity={el.opacity / 100}
+                    style={{ pointerEvents: 'none', userSelect: 'none' }}
+                  >
+                    <textPath href={`#${tpId}`} startOffset={`${Math.round((el.pathOffset || 0) * 100)}%`}>
+                      {el.textContent || 'Text'}
+                    </textPath>
+                  </text>
+                </g>
+              )
+            }
+          }
+        }
+
         // PHASE 10: real measurement drives line layout (wrap for grow, shrink for hug)
         const autoResize = el.textAutoResize || 'fixed'
         const measureParams = {
@@ -637,6 +675,48 @@ const CanvasElement = React.memo(function CanvasElement({
                           {wordEl.w}
                         </text>
                       ))
+                    ) : el.links && el.links.length > 0 ? (
+                      /* PHASE 19 (T7) — hyperlink runs: measured tspans, link
+                         styled (blue + underline). Char ranges are indices into
+                         the ORIGINAL content; line ranges come from buildTextLines. */
+                      (() => {
+                        const W = measureLine(line.text, measureParams)
+                        const anchorOff = textAlign === 'center' ? -W / 2 : textAlign === 'right' ? -W : 0
+                        const lineStart = (line as { contentStart?: number }).contentStart ?? 0
+                        const runs = splitLineIntoRuns(
+                          line.text,
+                          lineStart,
+                          el.links || [],
+                          (s) => measureLine(s, measureParams),
+                          fontSize,
+                        )
+                        return (
+                          <text
+                            x={baseX}
+                            y={startY + i * lineHeightPx}
+                            fontSize={fontSize}
+                            fontWeight={fontWeight}
+                            fontFamily={fontFamily}
+                            fontStyle={fontStyle}
+                            letterSpacing={letterSpacing}
+                            fill={textColor}
+                            textAnchor="start"
+                            opacity={el.opacity / 100}
+                            style={{ pointerEvents: 'none', userSelect: 'none' }}
+                          >
+                            {runs.map((r, ri) => (
+                              <tspan
+                                key={ri}
+                                x={baseX + anchorOff + r.x}
+                                fill={r.link ? LINK_COLOR : undefined}
+                                textDecoration={r.link ? 'underline' : textDecoration === 'underline' ? 'underline' : undefined}
+                              >
+                                {r.text}
+                              </tspan>
+                            ))}
+                          </text>
+                        )
+                      })()
                     ) : (
                       <text
                         x={baseX}
@@ -2101,6 +2181,8 @@ function CommentComposerInput() {
         data-testid="comment-composer-input"
       />
       <div className="flex gap-1">
+        {/* PHASE 19 (T8) — comments emoji picker (source: comments.emojiPicker + insertEmoji) */}
+        <EmojiPickerButton onPick={(em) => setText((t) => t + em)} label="🙂" />
         <button onClick={submit} className="flex-1 h-6 rounded bg-[#0D99FF] text-white text-[10px]" data-testid="comment-post">Post</button>
         <button onClick={() => useEditorStore.getState().closeComposer()} className="flex-1 h-6 rounded bg-[#1E1E1E] text-[#AAA] text-[10px] hover:bg-[#3C3C3C]">Cancel</button>
       </div>

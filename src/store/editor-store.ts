@@ -460,6 +460,14 @@ export interface DesignElement {
    *  start: degrees (0 = 3 o'clock, cw positive); sweep: degrees extent;
    *  innerRatio: 0..1 (0 = pie, >0 = donut). See lib/arc.ts. */
   arc?: import('@/lib/arc').EllipseArc
+  /** PHASE 19 (T6) — text on path (source: vectors.text_on_path_tool_announcement).
+   *  When set, this text renders along the referenced path element (SVG <textPath>). */
+  onPathId?: string
+  /** PHASE 19 — offset along the path, 0..1 (SVG startOffset %). */
+  pathOffset?: number
+  /** PHASE 19 (T7) — hyperlink text markers (source: text marker type "HYPERLINK",
+   *  1517-f945…). Char ranges into textContent. */
+  links?: { start: number; end: number; url: string }[]
 }
 
 export interface Page {

@@ -18,6 +18,8 @@ export const ELEMENT_FIELD_WHITELIST = [
   // text
   'textContent', 'fontFamily', 'fontSize', 'fontWeight', 'fontStyle',
   'textDecoration', 'textAlign', 'lineHeight', 'letterSpacing', 'textColor',
+  // PHASE 19 — text on path + hyperlink runs
+  'onPathId', 'pathOffset', 'links',
   // vector / shape
   'pathPoints', 'pathClosed', 'vectorNetwork', 'sides', 'innerRadius',
   // PHASE 17 — ellipse arc (Start/Sweep/Ratio; see lib/arc.ts)

@@ -74,7 +74,8 @@ evidence, not opinion.
   (parametric → converted to path copy, non-destructive ask? Figma converts —
   follow Figma: entering edit on parametric shape converts it to a path).
 
-### PHASE 19 — Text & media depth
+### PHASE 19 — Text & media depth ✅ DONE (2026-10-20)
+<!-- closed: text-on-path + hyperlink runs + emoji picker + place-image queue; see PROGRESS.md -->
 - **T6 Text on path**: text element gains `onPathId`; rendering via SVG
   `<textPath>`; offset along path; editing UX = type in place.
 - **T7 Hyperlink markers**: text-run `links: {start,end,url}[]`; render

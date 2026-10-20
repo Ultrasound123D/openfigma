@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useRef, useState, useEffect } from 'react'
 import { useEditorStore, generateId, createDefaultElement } from '@/store/editor-store'
 import type { DesignElement } from '@/store/editor-store'
 import { calculateSnapLines, constrainToAngle, type SnapLine } from '@/lib/snap-utils'
@@ -8,6 +8,7 @@ import { findElementInList, simplifyPath, smoothPointsToPathPoints, pathPointsTo
 // PHASE 18 — parametric shape → vector conversion on edit-entry
 import { isShapeToVectorCandidate } from '@/lib/shape-to-vector'
 import { loadImageAsBase64, createImageElement, isImageFile } from '@/lib/image-utils'
+import { toast } from '@/hooks/use-toast'
 // PHASE 11 — uniform scale engine
 import { scaleElementBy } from '@/lib/scale-element'
 import { handleCursors } from './canvas-helpers'
@@ -59,6 +60,72 @@ export function useElementInteractions({ viewport, hitTest, pen, pathEditing }: 
   const [isDrawing, setIsDrawing] = useState(false)
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null)
   const [drawCurrent, setDrawCurrent] = useState<{ x: number; y: number } | null>(null)
+  // PHASE 19 (T9) — PLACE_IMAGE queue (source: editMode PLACE_IMAGE,
+  // "toolbar-place-image": click or drag to place). Esc cancels the rest.
+  const pendingImagesRef = useRef<string[]>([])
+  const placeNextPending = useCallback(async (cx: number, cy: number, rect: { x: number; y: number; w: number; h: number } | null) => {
+    const next = pendingImagesRef.current.shift()
+    if (!next) {
+      pendingImagesRef.current = []
+      return
+    }
+    const imgEl = await createImageElement(next, 0, 0)
+    let width = imgEl.width
+    let height = imgEl.height
+    let x: number
+    let y: number
+    if (rect && rect.w > 8 && rect.h > 8) {
+      // drag: fit the rect, aspect kept, centered in the rect
+      const s = Math.min(rect.w / imgEl.width, rect.h / imgEl.height)
+      width = Math.max(8, Math.round(imgEl.width * s))
+      height = Math.max(8, Math.round(imgEl.height * s))
+      x = rect.x + (rect.w - width) / 2
+      y = rect.y + (rect.h - height) / 2
+    } else {
+      // click: natural size (already capped by createImageElement) centered on the point
+      x = cx - width / 2
+      y = cy - height / 2
+    }
+    const state = useEditorStore.getState()
+    state.addElement({ ...imgEl, x, y, width, height })
+    state.setSelectedElementIds([imgEl.id])
+    state.pushHistory()
+    const rest = pendingImagesRef.current.length
+    if (rest > 0) toast({ title: `Placed · ${rest} left`, description: 'Click or drag to place the next image (Esc to cancel).' })
+    else toast({ title: 'Placed all images.' })
+  }, [])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && pendingImagesRef.current.length > 0) {
+        pendingImagesRef.current = []
+        setIsDrawing(false)
+        setDrawStart(null)
+        setDrawCurrent(null)
+        toast({ title: 'Image placement cancelled.' })
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
+  // PHASE 19 test hook (same pattern as window.__openfigma, PHASE 12):
+  // lets live verification drive the PLACE_IMAGE queue without a native
+  // file dialog. No-op outside tests.
+  useEffect(() => {
+    (window as unknown as Record<string, unknown>).__openfigmaPlaceImages = {
+      setQueue: (list: string[]) => { pendingImagesRef.current = list },
+      remaining: () => pendingImagesRef.current.length,
+      probe: () => ({
+        remaining: pendingImagesRef.current.length,
+        isDrawing,
+        drawStart,
+        drawCurrent,
+        activeTool: useEditorStore.getState().activeTool,
+        spaceHeld,
+        isPanning,
+      }),
+    }
+    return () => { delete (window as unknown as Record<string, unknown>).__openfigmaPlaceImages }
+  }, [isDrawing, drawStart, drawCurrent])
 
   const [isDragging, setIsDragging] = useState(false)
   const dragStartRef = useRef<{ x: number; y: number } | null>(null)
@@ -403,7 +470,14 @@ export function useElementInteractions({ viewport, hitTest, pen, pathEditing }: 
       }
 
       if (activeTool === 'image') {
-        // Image tool handled on mouseUp (file picker)
+        // PHASE 19 (T9): with a placement queue active, mouse-down starts a
+        // drag rect (draw state) — mouseUp decides click-place vs drag-place.
+        if (pendingImagesRef.current.length > 0) {
+          setDrawStart(canvasPos)
+          setDrawCurrent(canvasPos)
+          setIsDrawing(true)
+        }
+        // else: handled on mouseUp (file picker)
         return
       }
 
@@ -1114,24 +1188,53 @@ export function useElementInteractions({ viewport, hitTest, pen, pathEditing }: 
         setDrawCurrent(null)
       }
 
-      // Image tool: open file picker on click
+      // PHASE 19 (T9) — image tool: multi-pick → PLACE_IMAGE queue mode.
+      // Source: editMode PLACE_IMAGE + "toolbar-place-image": click or drag to
+      // place. First pick opens the file dialog (multiple); with a queue active,
+      // click places the next image at natural size centered on the point and
+      // drag places it fit to the drag rect (aspect kept). Esc cancels.
       if (activeTool === 'image' && !isDragging && !isResizing && !rubberBand) {
         const clientX = e.clientX
         const clientY = e.clientY
+        if (pendingImagesRef.current.length > 0) {
+          // queue active: drag rect (if any) sizes the placement; point centers it
+          const pos = screenToCanvas(clientX, clientY)
+          const rect = drawStart && drawCurrent
+            ? { x: Math.min(drawStart.x, drawCurrent.x), y: Math.min(drawStart.y, drawCurrent.y), w: Math.abs(drawCurrent.x - drawStart.x), h: Math.abs(drawCurrent.y - drawStart.y) }
+            : null
+          void placeNextPending(pos.x, pos.y, rect)
+          setIsDrawing(false)
+          setDrawStart(null)
+          setDrawCurrent(null)
+          return
+        }
         const input = document.createElement('input')
         input.type = 'file'
         input.accept = 'image/*'
+        input.multiple = true
         input.onchange = async (ev) => {
-          const file = (ev.target as HTMLInputElement).files?.[0]
-          if (!file || !isImageFile(file)) return
+          const files = Array.from((ev.target as HTMLInputElement).files || [])
+          const imgs = files.filter(isImageFile)
+          if (!imgs.length) return
           try {
-            const base64 = await loadImageAsBase64(file)
-            const pos = screenToCanvas(clientX, clientY)
-            const imgEl = await createImageElement(base64, pos.x, pos.y)
-            const state = useEditorStore.getState()
-            state.addElement(imgEl)
-            state.setSelectedElementIds([imgEl.id])
-            state.pushHistory()
+            const loaded: string[] = []
+            for (const f of imgs) {
+              loaded.push(await loadImageAsBase64(f))
+            }
+            if (loaded.length === 0) return
+            if (loaded.length === 1) {
+              // single image: legacy behavior — place at the click point
+              const pos = screenToCanvas(clientX, clientY)
+              const imgEl = await createImageElement(loaded[0], pos.x, pos.y)
+              const state = useEditorStore.getState()
+              state.addElement(imgEl)
+              state.setSelectedElementIds([imgEl.id])
+              state.pushHistory()
+            } else {
+              // multi: enter PLACE_IMAGE queue
+              pendingImagesRef.current = loaded
+              toast({ title: `Placing 1/${loaded.length}`, description: 'Click or drag on the canvas (Esc to cancel).' })
+            }
           } catch (err) {
             console.error('Failed to load image:', err)
           }

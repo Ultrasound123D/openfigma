@@ -36,6 +36,9 @@ import { EffectsPanel } from './EffectsPanel'
 import { ExportPanel } from './ExportPanel'
 // PHASE 7 — style menu (four-dots) per slot
 import type { StyleSlot, StyleKind } from '@/lib/styles'
+import { getAllElements } from '@/lib/element-utils'
+// PHASE 19 (T8) — emoji picker (text content insert)
+import { EmojiPickerButton } from './EmojiPicker'
 import { gradientPreviewCSS } from '@/lib/gradient-paints'
 // PHASE 8 — per-frame layout grid editor
 import { LayoutGridsPanel } from './LayoutGridsPanel'
@@ -942,6 +945,67 @@ export function PropertiesPanel() {
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] text-[#888] w-14 shrink-0">Content</span>
                   <textarea value={element.textContent || ''} onChange={(e) => handleTextChange('textContent', e.target.value)} className="flex-1 h-12 px-1.5 py-1 text-[11px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF] resize-none" rows={2} />
+                  {/* PHASE 19 (T8) — insert emoji at end of content */}
+                  <EmojiPickerButton onPick={(em) => handleTextChange('textContent', (element.textContent || '') + em)} />
+                </div>
+                {/* PHASE 19 (T6) — On path: target picker + offset */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-[#888] w-14 shrink-0">On path</span>
+                  <select
+                    value={element.onPathId || ''}
+                    onChange={(e) => {
+                      pushHistory()
+                      const v = e.target.value
+                      updateElement(element.id, v ? { onPathId: v, pathOffset: element.pathOffset ?? 0 } : { onPathId: undefined })
+                    }}
+                    className="flex-1 h-5 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF]"
+                  >
+                    <option value="">— box layout —</option>
+                    {getAllElements(elements)
+                      .filter((t: any) => t.id !== element.id && (t.type === 'path' || t.type === 'ellipse' || t.type === 'line' || t.type === 'arrow'))
+                      .map((t: any) => (
+                        <option key={t.id} value={t.id}>{t.name || t.type} ({t.type})</option>
+                      ))}
+                  </select>
+                  {element.onPathId && (
+                    <>
+                      <input
+                        type="number" step={0.05} min={0} max={1}
+                        value={element.pathOffset ?? 0}
+                        onChange={(e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) updateElement(element.id, { pathOffset: Math.min(1, Math.max(0, n)) }) }}
+                        className="w-12 h-5 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] text-center focus:outline-none focus:border-[#0D99FF] tabular-nums"
+                        title="Offset along path (0–1)"
+                      />
+                      <button
+                        onClick={() => { pushHistory(); updateElement(element.id, { onPathId: undefined }) }}
+                        className="h-5 px-1.5 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#AAA] hover:text-[#FFF] hover:border-[#F44336]"
+                      >✕</button>
+                    </>
+                  )}
+                </div>
+                {/* PHASE 19 (T7) — Link runs editor */}
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-[#888] w-14 shrink-0">Links</span>
+                    <button
+                      onClick={() => {
+                        pushHistory()
+                        const content = element.textContent || ''
+                        const links = [...(element.links || [])]
+                        links.push({ start: 0, end: Math.max(1, content.length), url: 'https://' })
+                        updateElement(element.id, { links })
+                      }}
+                      className="h-5 px-2 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#AAA] hover:text-[#FFF] hover:border-[#0D99FF]"
+                    >+ Link</button>
+                  </div>
+                  {(element.links || []).map((lk: { start: number; end: number; url: string }, li: number) => (
+                    <div key={li} className="flex items-center gap-1">
+                      <input type="number" min={0} value={lk.start} onChange={(e) => { const links = [...(element.links || [])]; links[li] = { ...lk, start: Math.max(0, parseInt(e.target.value) || 0) }; updateElement(element.id, { links }) }} className="w-10 h-5 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] text-center" title="start char" />
+                      <input type="number" min={0} value={lk.end} onChange={(e) => { const links = [...(element.links || [])]; links[li] = { ...lk, end: Math.max(0, parseInt(e.target.value) || 0) }; updateElement(element.id, { links }) }} className="w-10 h-5 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] text-center" title="end char" />
+                      <input type="text" value={lk.url} onChange={(e) => { const links = [...(element.links || [])]; links[li] = { ...lk, url: e.target.value }; updateElement(element.id, { links }) }} className="flex-1 h-5 px-1 text-[10px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD]" placeholder="https://…" />
+                      <button onClick={() => { const links = (element.links || []).filter((_, i) => i !== li); updateElement(element.id, { links }) }} className="text-[#F44336] text-[10px] px-1">✕</button>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>

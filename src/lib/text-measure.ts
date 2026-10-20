@@ -121,6 +121,9 @@ export interface TextDisplayLine {
   prefix?: string
   /** x offset where the prefix is rendered */
   prefixX?: number
+  /** PHASE 19 (T7) — char index of this line's text within the ORIGINAL
+   *  content (for hyperlink run mapping). Undefined for legacy callers. */
+  contentStart?: number
 }
 
 export interface BuildTextLinesOpts {
@@ -134,40 +137,83 @@ export interface BuildTextLinesOpts {
 export function buildTextLines(p: TextStyleParams, opts: BuildTextLinesOpts = {}): TextDisplayLine[] {
   const { listType = 'none', listIndent = 0, autoResize = 'fixed', boxWidth = 0 } = opts
   const rawLines = p.text.split('\n')
+  // PHASE 19: absolute char start of each raw line (\n = 1 char)
+  const rawStarts: number[] = []
+  let acc = 0
+  for (const rl of rawLines) { rawStarts.push(acc); acc += rl.length + 1 }
   if (listType === 'none') {
     if (autoResize === 'hug') {
-      return rawLines.map(l => ({ text: l, x: 0 }))
+      return rawLines.map((l, i) => ({ text: l, x: 0, contentStart: rawStarts[i] }))
     }
     const wrapped: TextDisplayLine[] = []
-    for (const l of rawLines) {
-      for (const w of wrapText(l, p, Math.max(1, boxWidth))) wrapped.push({ text: w, x: 0 })
+    for (let pi = 0; pi < rawLines.length; pi++) {
+      const l = rawLines[pi]
+      const ranges = wrapTextRanges(l, p, Math.max(1, boxWidth))
+      for (const r of ranges) wrapped.push({ text: r.text, x: 0, contentStart: rawStarts[pi] + r.start })
     }
     return wrapped
   }
   // list mode: each paragraph is one item; hanging indent under the prefix
   const out: TextDisplayLine[] = []
   let itemIndex = 0
-  for (const para of rawLines) {
+  for (let pi = 0; pi < rawLines.length; pi++) {
+    const para = rawLines[pi]
+    const paraStart = rawStarts[pi]
     const prefix = listType === 'ordered' ? `${itemIndex + 1}.` : '•'
     const prefixWidth = measureLine(prefix + ' ', p)
     const indent = listIndent
     const textX = indent + prefixWidth
     if (para.length === 0) {
-      out.push({ text: '', x: textX, prefix, prefixX: indent })
+      out.push({ text: '', x: textX, prefix, prefixX: indent, contentStart: paraStart })
       itemIndex++
       continue
     }
     if (autoResize === 'hug') {
-      out.push({ text: para, x: textX, prefix, prefixX: indent })
+      out.push({ text: para, x: textX, prefix, prefixX: indent, contentStart: paraStart })
     } else {
       const wrapWidth = Math.max(1, boxWidth - textX)
-      const words = wrapText(para, p, wrapWidth)
-      words.forEach((w, i) => {
-        if (i === 0) out.push({ text: w, x: textX, prefix, prefixX: indent })
-        else out.push({ text: w, x: textX })
+      const ranges = wrapTextRanges(para, p, wrapWidth)
+      ranges.forEach((r, i) => {
+        if (i === 0) out.push({ text: r.text, x: textX, prefix, prefixX: indent, contentStart: paraStart + r.start })
+        else out.push({ text: r.text, x: textX, contentStart: paraStart + r.start })
       })
     }
     itemIndex++
   }
   return out
+}
+
+/**
+ * PHASE 19 (T7) — wrapText with ABSOLUTE char ranges: mirrors wrapText's
+ * algorithm but also reports each emitted chunk's start index within the
+ * input line (whitespace runs consumed between chunks are accounted for).
+ */
+export function wrapTextRanges(text: string, p: TextStyleParams, maxWidth: number): { text: string; start: number }[] {
+  const out: { text: string; start: number }[] = []
+  let cursor = 0 // absolute index in `text`
+  const words = text.split(/(\s+)/) // keep whitespace runs (same as wrapText)
+  let current = ''
+  let currentStart = -1
+  const flush = () => {
+    if (current.length > 0) {
+      out.push({ text: current, start: currentStart < 0 ? 0 : currentStart })
+    }
+    current = ''
+    currentStart = -1
+  }
+  for (const w of words) {
+    if (/^\s+$/.test(w)) { current += w; cursor += w.length; continue } // whitespace run appended (same accumulation); cursor advanced
+    if (currentStart < 0) currentStart = cursor
+    const candidate = current + w
+    if (measureLine(candidate.trimEnd(), p) <= maxWidth || current.length === 0) {
+      current = candidate
+    } else {
+      flush()
+      current = w.trimStart()
+      currentStart = cursor + (w.length - w.trimStart().length)
+    }
+    cursor += w.length
+  }
+  flush()
+  return out.map((r) => ({ text: r.text.trimEnd(), start: r.start }))
 }

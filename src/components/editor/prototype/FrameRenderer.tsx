@@ -17,12 +17,28 @@ import React from 'react'
 import type { DesignElement } from '@/store/editor-store'
 import { pathElementToSvgPath, isEvenOddFill } from '@/lib/element-utils'
 import { calculateAutoLayout, hasAutoLayout } from '@/lib/auto-layout'
-import { buildTextLines, applyTextCase } from '@/lib/text-measure'
+import { buildTextLines, applyTextCase, measureLine } from '@/lib/text-measure'
 // PHASE 14 — angular + diamond gradient paints
 import { AngularPatternContent, DiamondPatternContent } from '@/lib/gradient-paints'
 // PHASE 17 — ellipse arc + live boolean baked geometry
 import { ellipseShapePath, arcIsEvenOdd } from '@/lib/arc'
 import { booleanGroupPathD } from '@/lib/boolean-ops'
+// PHASE 19 — text on path + hyperlink runs
+import { onPathTargetD, onPathTargetTransform, splitLineIntoRuns, LINK_COLOR } from '@/lib/text-on-path'
+import { useEditorStore } from '@/store/editor-store'
+
+/** PHASE 19 — resolve an on-path target from the live store (player/preview). */
+function onPathTargetFromStore(id: string): DesignElement | null {
+  const els = useEditorStore.getState().elements
+  const walk = (list: DesignElement[]): DesignElement | null => {
+    for (const e of list) {
+      if (e.id === id) return e
+      if (e.children) { const r = walk(e.children); if (r) return r }
+    }
+    return null
+  }
+  return walk(els)
+}
 
 /** Resolve the SVG fill value for an element (solid / gradient / image). */
 function fillOf(el: DesignElement): string {
@@ -223,6 +239,38 @@ function Shape({ el }: { el: DesignElement }) {
     case 'text': {
       const fontSize = el.fontSize || 18
       const lineHeightPx = fontSize * (el.lineHeight || 1.4)
+
+      // PHASE 19 (T6) — text on path (player renders along the target path)
+      if (el.onPathId) {
+        const target = onPathTargetFromStore(el.onPathId)
+        if (target) {
+          const d = onPathTargetD(target)
+          if (d) {
+            const tpId = `fr-tp-${el.id}`
+            return (
+              <g opacity={el.opacity / 100}>
+                <defs>
+                  <path id={tpId} d={d} transform={onPathTargetTransform(target, el)} />
+                </defs>
+                <text
+                  fontSize={fontSize}
+                  fontWeight={el.fontWeight || 400}
+                  fontFamily={el.fontFamily || 'Inter, system-ui, sans-serif'}
+                  fontStyle={el.fontStyle || 'normal'}
+                  letterSpacing={el.letterSpacing || 0}
+                  fill={el.textColor || el.fill || '#000000'}
+                  style={{ pointerEvents: 'none', userSelect: 'none' }}
+                >
+                  <textPath href={`#${tpId}`} startOffset={`${Math.round((el.pathOffset || 0) * 100)}%`}>
+                    {el.textContent || 'Text'}
+                  </textPath>
+                </text>
+              </g>
+            )
+          }
+        }
+      }
+
       // PHASE 13: list-aware lines + vertical alignment (parity with Canvas)
       const params = {
         text: el.textContent || 'Text',
@@ -251,7 +299,16 @@ function Shape({ el }: { el: DesignElement }) {
           ? () => el.width
           : (l: { x: number }) => l.x
       return (
-        <g opacity={el.opacity / 100}>
+        <g
+          opacity={el.opacity / 100}
+          /* PHASE 19 (T7) — link click opens the first URL (player/preview) */
+          onClick={el.links && el.links.length > 0 ? (ev) => {
+            ev.stopPropagation()
+            const u = el.links![0].url
+            if (u) window.open(u, '_blank', 'noopener')
+          } : undefined}
+          style={el.links && el.links.length > 0 ? { cursor: 'pointer' } : undefined}
+        >
           {lines.map((line, i) => (
             <React.Fragment key={i}>
               {line.prefix && (
@@ -269,6 +326,33 @@ function Shape({ el }: { el: DesignElement }) {
                   {line.prefix}
                 </text>
               )}
+              {el.links && el.links.length > 0 && line.text ? (
+                (() => {
+                  const W = measureLine(line.text, params)
+                  const anchorOff = el.textAlign === 'center' ? -W / 2 : el.textAlign === 'right' ? -W : 0
+                  const runs = splitLineIntoRuns(line.text, line.contentStart ?? 0, el.links || [], (s) => measureLine(s, params), fontSize)
+                  return (
+                    <text
+                      x={x(line)}
+                      y={startY + i * lineHeightPx}
+                      fontSize={fontSize}
+                      fontWeight={el.fontWeight || 400}
+                      fontFamily={el.fontFamily || 'Inter, system-ui, sans-serif'}
+                      fontStyle={el.fontStyle || 'normal'}
+                      letterSpacing={el.letterSpacing || 0}
+                      fill={el.textColor || el.fill || '#000000'}
+                      textAnchor="start"
+                      style={{ pointerEvents: 'none', userSelect: 'none' }}
+                    >
+                      {runs.map((r, ri) => (
+                        <tspan key={ri} x={x(line) + anchorOff + r.x} fill={r.link ? LINK_COLOR : undefined} textDecoration={r.link ? 'underline' : el.textDecoration || 'none'}>
+                          {r.text}
+                        </tspan>
+                      ))}
+                    </text>
+                  )
+                })()
+              ) : (
               <text
                 x={x(line)}
                 y={startY + i * lineHeightPx}
@@ -284,6 +368,7 @@ function Shape({ el }: { el: DesignElement }) {
               >
                 {line.text}
               </text>
+              )}
             </React.Fragment>
           ))}
         </g>
