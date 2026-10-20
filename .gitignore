@@ -66,3 +66,6 @@ figmajsx/
 # exclude public assets
 public/
 !SECURITY.md
+
+# allow the icon-design workflow script in scripts/
+!scripts/*.py
