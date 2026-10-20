@@ -12,6 +12,8 @@ import { Toolbar } from './Toolbar'
 import { PrototypePlayer } from './prototype/PrototypePlayer'
 // PHASE 21 (E16) — find & replace panel
 import { FindReplaceModal } from './FindReplaceModal'
+// PHASE 22 (C20) — version history panel
+import { VersionHistoryPanel } from './VersionHistoryPanel'
 
 /**
  * UI3 chrome dimensions (PHASE 1, verified measurements — globals.css tokens):
@@ -63,6 +65,7 @@ export function EditorLayout() {
               <Canvas />
               <Toolbar />
               <FindReplaceModal />
+              <VersionHistoryPanel />
             </div>
           </ResizablePanel>
           {rightSidebarVisible && (

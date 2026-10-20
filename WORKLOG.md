@@ -73,3 +73,21 @@
 - scripts/p21_server.sh now mirrors p17–p20 (static copy) — the standalone
   server without .next/static serves CSS 404 and the layout collapses to the
   SVG default 300×150 (diagnosed live; baseline HEAD reproduced it too).
+
+### DECISION-017 — PHASE 22: server-side captures must flush the live document first
+- Version snapshots (saveVersionSnapshot) and library publishing
+  (publishLibraryFromProject) operate on the SERVER-persisted copy. Without a
+  flush, a version saved right after local edits captures a stale/empty
+  document and publishing misses unpushed components. Both actions now push
+  the live document (pushProjectToServer) before the request — Figma parity:
+  a named version / published library captures exactly what the user sees.
+- Restore undo: loadServerProject resets history to [{loaded}] @ index 0,
+  which wiped restoreVersion's pre-restore entry. restoreVersion now
+  re-inserts the captured pre-restore snapshot below the loaded state, so
+  ⌘Z returns the document as it was before the restore (Figma parity).
+- Presence is strictly ephemeral (POST → SSE fan-out, never persisted,
+  pruned >10s client-side) — source model is a cursor store, not a document.
+- Library insert uses a single-file model: importing a component copies a
+  hidden locked master into the target project + a visible instance bound by
+  componentId (instance semantics already exist). Cross-project live master
+  linking is out of scope (no source evidence of the sync transport).

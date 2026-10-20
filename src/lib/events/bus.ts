@@ -22,6 +22,7 @@ export type ProjectEventType =
   | 'element-deleted'
   | 'pages-changed'
   | 'project-updated'
+  | 'presence'
 
 export interface ProjectEvent {
   type: ProjectEventType
@@ -34,6 +35,21 @@ export interface ProjectEvent {
   element?: unknown
   /** Element id for updated/deleted events */
   elementId?: string
+  /** PHASE 22 (C19) — multiplayer presence payload (cursor/viewport/selection).
+   *  Ephemeral: never persisted, only forwarded live. */
+  presence?: {
+    clientId: string
+    name: string
+    color: string
+    /** Cursor position in canvas coordinates */
+    cursor?: { x: number; y: number }
+    /** Viewport rect in canvas coordinates */
+    viewport?: { x: number; y: number; w: number; h: number }
+    /** Selection bbox in canvas coordinates (null = no selection) */
+    selection?: { x: number; y: number; w: number; h: number } | null
+    /** 'leave' = client disconnected / stopped sharing */
+    kind?: 'move' | 'leave'
+  }
   /** Timestamp (ms) */
   at: number
 }

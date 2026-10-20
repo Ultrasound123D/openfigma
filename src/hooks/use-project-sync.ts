@@ -125,6 +125,18 @@ export function useProjectSync() {
       }
     })
 
+    // PHASE 22 (C19) — multiplayer presence (ephemeral, never persisted)
+    source.addEventListener('presence', (e) => {
+      try {
+        const payload = JSON.parse((e as MessageEvent).data)
+        if (payload?.presence) {
+          useEditorStore.getState().applyRemotePresence(payload.presence)
+        }
+      } catch {
+        // malformed presence payload — ignore (ephemeral by design)
+      }
+    })
+
     source.onerror = () => {
       // EventSource retries automatically; surface the state to the UI.
       useEditorStore.getState().setSyncStatus('connecting')

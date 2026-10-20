@@ -32,6 +32,9 @@ import { onPathTargetD, onPathTargetTransform, splitLineIntoRuns, LINK_COLOR } f
 import { EmojiPickerButton } from './EmojiPicker'
 // PHASE 21 (VW18) — pixel preview raster layer
 import { PixelPreviewLayer } from './canvas/PixelPreviewLayer'
+// PHASE 22 (C19) — multiplayer presence broadcast + remote cursors overlay
+import { usePresence } from './canvas/use-presence'
+import { RemoteCursors } from './canvas/RemoteCursors'
 
 // PHASE 21 (VW17) — outline mode context (source: showOutlines /
 // showOutlineHiddenLayers / showOutlineObjectBounds property bindings on the
@@ -1192,8 +1195,37 @@ const CanvasElement = React.memo(function CanvasElement({
 })
 
 export function Canvas() {
+  // PHASE 22 debug hook (pattern: window.__openfigmaPlaceImages from PHASE 19)
+  React.useEffect(() => {
+    ;(window as unknown as Record<string, unknown>).__openfigmaDebug = () => {
+      const s = useEditorStore.getState()
+      return {
+        viewingVersion: s.viewingVersion ? {
+          id: s.viewingVersion.id,
+          label: s.viewingVersion.label,
+          snapEls: s.viewingVersion.snapshot.elements.length,
+          snapActive: s.viewingVersion.snapshot.activePageId,
+        } : null,
+        activePageId: s.activePageId,
+        liveEls: s.elements.length,
+      }
+    }
+  }, [])
   // Store state needed for rendering
-  const elements = useEditorStore((s) => s.elements)
+  // PHASE 22 (C20) — while previewing a version the canvas renders the
+  // snapshot of the page matching by index (HISTORY edit mode, read-only)
+  const viewingVersion = useEditorStore((s) => s.viewingVersion)
+  const activePageId0 = useEditorStore((s) => s.activePageId)
+  const liveElements = useEditorStore((s) => s.elements)
+  const elements = React.useMemo(() => {
+    if (!viewingVersion) return liveElements
+    const snap = viewingVersion.snapshot
+    // project-level `elements` is the ACTIVE page at save time (snapshot.activePageId);
+    // pages[] holds the other pages (active page copy there is stale — same as live model)
+    if (snap.activePageId === activePageId0) return snap.elements || []
+    const page = (snap.pages || []).find((pg) => pg.id === activePageId0)
+    return page?.elements || []
+  }, [viewingVersion, activePageId0, liveElements])
   const selectedElementIds = useEditorStore((s) => s.selectedElementIds)
   const activeTool = useEditorStore((s) => s.activeTool)
   const zoom = useEditorStore((s) => s.zoom)
@@ -1246,6 +1278,9 @@ export function Canvas() {
     handleElementMouseDown, handleElementDoubleClick, handleMouseDown, handleMouseMove,
     handleMouseUp, handleDoubleClick, handleDrop, handleDragOver, getCursor,
   } = interactions
+
+  // PHASE 22 (C19) — presence broadcast (cursor/viewport/selection)
+  usePresence(containerRef)
 
   // keyboard: global shortcut layer (undo, tools, zoom, clipboard, ...)
   useCanvasKeyboard({
@@ -2089,6 +2124,31 @@ export function Canvas() {
           </OutlinesContext.Provider>
         </div>
       </CanvasContextMenu>
+
+      {/* PHASE 22 (C19) — remote cursors / selections / viewport overlay */}
+      <RemoteCursors />
+
+      {/* PHASE 22 (C20) — version preview banner (HISTORY read-only mode) */}
+      {viewingVersion && (
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 bg-[#2C2C2C] rounded-lg px-3 py-1.5 border border-[#0D99FF]/60 shadow-lg">
+          <span className="text-[11px] text-[#DDD]">
+            Viewing version: <span className="text-[#0D99FF]">{viewingVersion.label}</span>
+            <span className="text-[#888]"> (read-only)</span>
+          </span>
+          <button
+            className="h-6 px-2 text-[10px] rounded bg-[#0D99FF] text-white hover:bg-[#0B87E0]"
+            onClick={() => { void useEditorStore.getState().restoreVersion(viewingVersion.id) }}
+          >
+            Restore this version
+          </button>
+          <button
+            className="h-6 px-2 text-[10px] rounded border border-[#383838] text-[#CCC] hover:bg-[#3C3C3C]"
+            onClick={() => useEditorStore.getState().exitVersionPreview()}
+          >
+            Back to current
+          </button>
+        </div>
+      )}
 
       {/* Frame breadcrumb */}
       {currentFrameId && (

@@ -3,7 +3,7 @@
 import { create } from 'zustand'
 import { findElementInList, updateElementInList, removeElementFromList, deepCloneElements, getAllElements, findAncestors } from '@/lib/element-utils'
 import { computeAutoLayout } from '@/lib/auto-layout'
-import { normalizeServerElement, normalizeServerProject } from '@/lib/server-project'
+import { normalizeServerElement, normalizeServerProject, pushProjectToServer } from '@/lib/server-project'
 import {
   isBooleanOperandType, flattenOperand, polysToContours, contoursBounds, foldElementPolys,
   getBooleanGroupContours, booleanGroupPathD,
@@ -537,6 +537,41 @@ interface EditorState {
   pixelPreviewRetina: boolean
   // PHASE 21 (E16) — find & replace panel open state (source: FIND_AND_REPLACE=4)
   findReplaceOpen: boolean
+
+  // PHASE 22 (C19) — multiplayer presence (source: remoteCursorStore /
+  //  multiplayer_cursors / multiplayer_viewport_overlay / allUsers)
+  /** Remote collaborators by clientId — pruned when stale (>10s). */
+  remotePresences: Record<string, {
+    clientId: string
+    name: string
+    color: string
+    cursor?: { x: number; y: number }
+    viewport?: { x: number; y: number; w: number; h: number }
+    selection?: { x: number; y: number; w: number; h: number } | null
+    lastSeen: number
+  }>
+  /** Show remote cursors (source: visual_bell multiplayer_cursors_hidden/visible) */
+  showMultiplayerCursors: boolean
+  /** Hide the remote viewport overlay (source: toggle-viewport-overlay-hiding /
+   *  temporarilyHideViewportOverlay) */
+  hideViewportOverlay: boolean
+
+  // PHASE 22 (C20) — version history (source: versionHistory{versions,activeId},
+  //  activeCanvasEditModeType HISTORY, restoreVersionId, restore_initiated)
+  /** Version history panel open */
+  versionHistoryOpen: boolean
+  /** Non-null = viewing an old version read-only (HISTORY edit mode). */
+  viewingVersion: { id: string; label: string; snapshot: {
+    elements: DesignElement[]
+    pages: Page[]
+    activePageId: string
+  } } | null
+
+  // PHASE 22 (C21) — published libraries (source: assets_panel.publish_library /
+  //  publishedLibrary / fileSubscribedLibraryKeys / is_subscribed)
+  libraries: { key: string; name: string; publisher: string; publishedAt: string; componentCount?: number }[]
+  /** Library keys this project subscribes to (per-project is_subscribed parity). */
+  subscribedLibraryKeys: string[]
   
   // Guides
   guides: Guide[]
@@ -807,6 +842,34 @@ interface EditorState {
    *  replacing it (source: PASTE_OVER_SELECTION=53, action "paste-over-selection",
    *  is_edit:!0). */
   pasteOverSelection: () => void
+
+  // Actions - Presence (PHASE 22 C19)
+  /** Apply an incoming presence event (move/leave) + prune stale entries. */
+  applyRemotePresence: (presence: NonNullable<import('@/lib/events/bus').ProjectEvent['presence']>) => void
+  /** Drop presences not seen for >10s (called on a timer — pruning must not
+   *  depend on new events arriving). */
+  pruneRemotePresences: () => void
+  setShowMultiplayerCursors: (v: boolean) => void
+  setHideViewportOverlay: (v: boolean) => void
+
+  // Actions - Version history (PHASE 22 C20)
+  setVersionHistoryOpen: (v: boolean) => void
+  /** Enter read-only preview of a version snapshot (HISTORY edit mode). */
+  previewVersion: (version: { id: string; label: string; snapshot: { elements: DesignElement[]; pages: Page[]; activePageId: string } }) => void
+  /** Leave version preview back to the live document. */
+  exitVersionPreview: () => void
+  /** Restore a version on the server, then apply locally (undo-able). */
+  restoreVersion: (versionId: string) => Promise<boolean>
+  /** Save a labeled version snapshot of the current project. */
+  saveVersionSnapshot: (label: string) => Promise<boolean>
+
+  // Actions - Libraries (PHASE 22 C21)
+  loadLibraries: () => Promise<void>
+  publishLibraryFromProject: (name: string) => Promise<boolean>
+  toggleLibrarySubscription: (libraryKey: string) => void
+  /** Insert a library component: imports a hidden master + a visible instance
+   *  (instance semantics reuse createInstance model). Returns ok. */
+  insertLibraryComponent: (libraryKey: string, componentId: string) => Promise<boolean>
   /** E15 — select all elements matching the reference (last selected) element
    *  by the given criteria. Source children of "select-all-with-menu-options":
    *  select-same-{style,fill,stroke,effect,text,font,instance,variant}; plus
@@ -1523,6 +1586,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   pixelPreview: false,
   pixelPreviewRetina: false,
   findReplaceOpen: false,
+  // PHASE 22 — presence / versions / libraries (source-exact defaults)
+  remotePresences: {},
+  showMultiplayerCursors: true,
+  hideViewportOverlay: false,
+  versionHistoryOpen: false,
+  viewingVersion: null,
+  libraries: [],
+  subscribedLibraryKeys: [],
   // PHASE 7 — project styles
   styles: [],
   // PHASE 16 — comments
@@ -1566,6 +1637,209 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setPixelPreview: (v) => set({ pixelPreview: v }),
   setPixelPreviewRetina: (v) => set({ pixelPreviewRetina: v }),
   setFindReplaceOpen: (v) => set({ findReplaceOpen: v }),
+
+  // ---- PHASE 22 (C19/C20/C21) — collaboration actions ----
+  setShowMultiplayerCursors: (v) => set({ showMultiplayerCursors: v }),
+  setHideViewportOverlay: (v) => set({ hideViewportOverlay: v }),
+  setVersionHistoryOpen: (v) => set({ versionHistoryOpen: v }),
+
+  applyRemotePresence: (presence) =>
+    set((state) => {
+      const next = { ...state.remotePresences }
+      if (presence.kind === 'leave') {
+        delete next[presence.clientId]
+        return { remotePresences: next }
+      }
+      const existing = next[presence.clientId]
+      next[presence.clientId] = {
+        clientId: presence.clientId,
+        name: presence.name,
+        color: presence.color,
+        cursor: presence.cursor ?? existing?.cursor,
+        viewport: presence.viewport ?? existing?.viewport,
+        selection: presence.selection !== undefined ? presence.selection : existing?.selection,
+        lastSeen: Date.now(),
+      }
+      // prune entries not seen for 10s
+      const now = Date.now()
+      for (const key of Object.keys(next)) {
+        if (now - next[key].lastSeen > 10_000) delete next[key]
+      }
+      return { remotePresences: next }
+    }),
+
+  pruneRemotePresences: () =>
+    set((state) => {
+      const now = Date.now()
+      const next = { ...state.remotePresences }
+      let changed = false
+      for (const key of Object.keys(next)) {
+        if (now - next[key].lastSeen > 10_000) { delete next[key]; changed = true }
+      }
+      return changed ? { remotePresences: next } : state
+    }),
+
+  previewVersion: (version) =>
+    set({ viewingVersion: version, selectedElementIds: [] }),
+
+  exitVersionPreview: () => set({ viewingVersion: null }),
+
+  restoreVersion: async (versionId) => {
+    const state = get()
+    if (!state.currentProjectId) return false
+    try {
+      // parity: restore.in_progress → restore_initiated → restore_completed
+      const res = await fetch(`/api/editor/projects/${state.currentProjectId}/versions/${versionId}/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Client-Id': state.clientId },
+      })
+      if (!res.ok) return false
+      // capture pre-restore state so undo brings the live document back
+      const preRestore: HistoryEntry = {
+        elements: deepCloneElements(state.elements),
+        selectedElementIds: [...state.selectedElementIds],
+      }
+      // leave preview and reload the restored document from the server
+      set({ viewingVersion: null, versionHistoryOpen: true })
+      await get().loadServerProject(state.currentProjectId)
+      // PHASE 22 fix (live-verified): loadServerProject resets history to
+      // [{restored}] @ index 0 — re-insert the captured pre-restore snapshot
+      // below it so ⌘Z returns the user to the document as it was before the
+      // restore (Figma parity: restore is undo-able).
+      set((s) => ({
+        history: [
+          preRestore,
+          { elements: deepCloneElements(s.elements), selectedElementIds: [] },
+        ],
+        historyIndex: 1,
+      }))
+      return true
+    } catch {
+      return false
+    }
+  },
+
+  saveVersionSnapshot: async (label) => {
+    const state = get()
+    if (!state.currentProjectId) return false
+    try {
+      // PHASE 22 fix (live-verified): the server snapshots its STORED copy, so
+      // the live document must be flushed first — otherwise a version saved
+      // right after local edits captures a stale/empty document (Figma parity:
+      // a named version captures exactly what the user sees).
+      await pushProjectToServer({
+        currentProjectId: state.currentProjectId,
+        clientId: state.clientId,
+        fileName: state.fileName,
+        elements: state.elements,
+        pages: state.pages,
+        activePageId: state.activePageId,
+        guides: state.guides as unknown[] | undefined,
+        styles: state.styles as unknown[] | undefined,
+        comments: state.comments as unknown[] | undefined,
+        flowStartingPoints: state.flowStartingPoints as unknown[] | undefined,
+      })
+      const res = await fetch(`/api/editor/projects/${state.currentProjectId}/versions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Client-Id': state.clientId },
+        body: JSON.stringify({ label }),
+      })
+      return res.ok
+    } catch {
+      return false
+    }
+  },
+
+  loadLibraries: async () => {
+    try {
+      const res = await fetch('/api/editor/libraries')
+      if (!res.ok) return
+      const data = await res.json()
+      if (Array.isArray(data?.libraries)) set({ libraries: data.libraries })
+    } catch {
+      // offline — keep current list
+    }
+  },
+
+  publishLibraryFromProject: async (name) => {
+    const state = get()
+    if (!state.currentProjectId) return false
+    try {
+      // PHASE 22 fix (live-verified): flush the live document first — the
+      // publish route collects components from the SERVER copy, so unpushed
+      // local components would be missed (Figma parity: publish captures the
+      // current file state).
+      await pushProjectToServer({
+        currentProjectId: state.currentProjectId,
+        clientId: state.clientId,
+        fileName: state.fileName,
+        elements: state.elements,
+        pages: state.pages,
+        activePageId: state.activePageId,
+        guides: state.guides as unknown[] | undefined,
+        styles: state.styles as unknown[] | undefined,
+        comments: state.comments as unknown[] | undefined,
+        flowStartingPoints: state.flowStartingPoints as unknown[] | undefined,
+      })
+      const res = await fetch('/api/editor/libraries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Client-Id': state.clientId },
+        body: JSON.stringify({ projectId: state.currentProjectId, name, publisher: 'You' }),
+      })
+      if (!res.ok) return false
+      await get().loadLibraries()
+      return true
+    } catch {
+      return false
+    }
+  },
+
+  toggleLibrarySubscription: (libraryKey) =>
+    set((state) => {
+      const subs = state.subscribedLibraryKeys.includes(libraryKey)
+        ? state.subscribedLibraryKeys.filter((k) => k !== libraryKey)
+        : [...state.subscribedLibraryKeys, libraryKey]
+      return { subscribedLibraryKeys: subs }
+    }),
+
+  insertLibraryComponent: async (libraryKey, componentId) => {
+    try {
+      const res = await fetch(`/api/editor/libraries/${encodeURIComponent(libraryKey)}`)
+      if (!res.ok) return false
+      const data = await res.json()
+      const component = (data?.library?.components || []).find(
+        (c: DesignElement) => c.id === componentId
+      ) as DesignElement | undefined
+      if (!component) return false
+
+      const state = get()
+      // import master hidden+locked (single-file model: the master must exist
+      // in the project for instance semantics — documented design decision)
+      const master = regenerateIds({ ...component, visible: false, locked: true } as DesignElement)
+      // visible instance at the current viewport center
+      const cx = -state.panX / (state.zoom || 1)
+      const cy = -state.panY / (state.zoom || 1)
+      const instance = regenerateIds({
+        ...component,
+        name: `${component.name} Instance`,
+        x: cx - component.width / 2,
+        y: cy - component.height / 2,
+        componentId: master.id,
+        isComponent: false,
+        componentProperties: {},
+        overrides: {},
+      } as DesignElement)
+      get().pushHistory()
+      set((s) => ({
+        elements: [...s.elements, master, instance],
+        selectedElementIds: [instance.id],
+        isDirty: true,
+      }))
+      return true
+    } catch {
+      return false
+    }
+  },
   setSelectedElementIds: (ids) => set({ selectedElementIds: ids }),
   
   toggleElementSelection: (id) =>
@@ -1846,8 +2120,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setGridSize: (size) => set({ gridSize: size }),
   setShowRulers: (show) => set({ showRulers: show }),
 
-  updateElement: (id, updates) =>
-    set((state) => {
+  // PHASE 22 (C20) — read-only while previewing a version (source:
+  // activeCanvasEditModeType === HISTORY). Central choke points.
+  __readOnlyGuard(): boolean {
+    return !!get().viewingVersion
+  },
+
+  updateElement: (id, updates) => {
+    if (get().viewingVersion) return
+    return set((state) => {
       const el = findElementInList(state.elements, id)
       let applied = updates
       // PHASE 12: manually resizing a hug-sized auto-layout frame switches that
@@ -1867,7 +2148,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }
       const elements = applyAutoLayoutSync(updateElementInList(state.elements, id, applied), [id])
       return { elements, isDirty: true }
-    }),
+    })
+  },
 
   // PHASE 12 — auto layout sync actions
   syncAutoLayoutTree: (elementId) =>
@@ -2014,17 +2296,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   toggleLeftSidebar: () => set((state) => ({ leftSidebarVisible: !state.leftSidebarVisible })),
   toggleRightSidebar: () => set((state) => ({ rightSidebarVisible: !state.rightSidebarVisible })),
 
-  moveElement: (id, dx, dy) =>
-    set((state) => ({
+  moveElement: (id, dx, dy) => {
+    if (get().viewingVersion) return
+    return set((state) => ({
       elements: updateElementInList(state.elements, id, { 
         x: (findElementInList(state.elements, id)?.x ?? 0) + dx, 
         y: (findElementInList(state.elements, id)?.y ?? 0) + dy 
       }),
       isDirty: true,
-    })),
+    }))
+  },
 
-  addElement: (element) =>
-    set((state) => {
+  addElement: (element) => {
+    if (get().viewingVersion) return
+    return set((state) => {
       // If a frame is currently being edited, add element as a child of that frame
       if (state.currentFrameId) {
         const frame = findElementInList(state.elements, state.currentFrameId)
@@ -2055,10 +2340,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         elements: [...state.elements, element],
         isDirty: true,
       }
-    }),
+    })
+  },
 
-  deleteElement: (id) =>
-    set((state) => {
+  deleteElement: (id) => {
+    if (get().viewingVersion) return
+    return set((state) => {
       // PHASE 12: capture the parent chain before removal so auto-layout frames re-flow
       const ancestors = findAncestors(state.elements, id)
       return {
@@ -2066,9 +2353,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         selectedElementIds: state.selectedElementIds.filter((i) => i !== id),
         isDirty: true,
       }
-    }),
+    })
+  },
 
-  deleteSelectedElements: () =>
+  deleteSelectedElements: () => {
+    if (get().viewingVersion) return
     set((state) => {
       // PHASE 12: capture all ancestor chains before removal (auto-layout re-flow)
       const ancestorIds = new Set<string>()
@@ -2084,7 +2373,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         selectedElementIds: [],
         isDirty: true,
       }
-    }),
+    })
+  },
 
   duplicateElement: (id) =>
     set((state) => {
@@ -2151,8 +2441,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return { elements: newElements, isDirty: true }
     }),
 
-  groupElements: (ids) =>
-    set((state) => {
+  groupElements: (ids) => {
+    if (get().viewingVersion) return
+    return set((state) => {
       if (ids.length < 2) return state
       const elementsToGroup = ids
         .map((id) => findElementInList(state.elements, id))
@@ -2243,10 +2534,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         selectedElementIds: [groupId],
         isDirty: true,
       }
-    }),
+    })
+  },
 
-  ungroupElements: (id) =>
-    set((state) => {
+  ungroupElements: (id) => {
+    if (get().viewingVersion) return
+    return set((state) => {
       const element = findElementInList(state.elements, id)
       if (!element || element.type !== 'group' || !element.children) return state
       
@@ -2263,7 +2556,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         selectedElementIds: absoluteChildren.map((c) => c.id),
         isDirty: true,
       }
-    }),
+    })
+  },
 
   renameElement: (id, name) =>
     set((state) => ({
@@ -2281,6 +2575,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   // ---- PHASE 21 (E14/E15) — edit parity actions ----
   /** Union bbox (page coords) of a top-level element list. */
   pasteOverSelection: () => {
+    if (get().viewingVersion) return
     const state = get()
     if (state.clipboard.length === 0 || state.selectedElementIds.length === 0) return
     const selEls = state.selectedElementIds
@@ -2622,6 +2917,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     })),
 
   pasteClipboard: () => {
+    if (get().viewingVersion) return
     const state = get()
     if (state.clipboard.length === 0) return
     

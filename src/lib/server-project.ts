@@ -138,7 +138,13 @@ export async function pushProjectToServer(state: {
       body: JSON.stringify({
         name: state.fileName,
         elements: state.elements,
-        pages: state.pages,
+        // PHASE 22 fix: sync the ACTIVE page into pages[] before sending — the
+        // store keeps live elements only in `elements` (pages[] syncs on page
+        // switch), so sending pages as-is would persist a stale active page
+        // and lose edits on reload.
+        pages: state.pages.map((p) =>
+          p.id === state.activePageId ? { ...p, elements: state.elements } : p
+        ),
         activePageId: state.activePageId,
         ...(state.guides ? { guides: state.guides } : {}),
         ...(state.styles ? { styles: state.styles } : {}),

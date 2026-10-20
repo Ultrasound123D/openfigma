@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getProject, saveProject, deleteProject } from '@/lib/server-state'
+import { getProject, saveProject, deleteProject, addVersionSnapshot } from '@/lib/server-state'
 import { publishProjectEvent, getRequestOrigin } from '@/lib/events/bus'
 
 // GET /api/editor/projects/[id]
@@ -28,6 +28,10 @@ export async function PUT(
   }
   const updated = { ...project, ...body, id, updatedAt: new Date().toISOString() }
   await saveProject(updated)
+
+  // PHASE 22 (C20) — throttled auto-snapshot on save (source: versionHistory
+  // autosaves; manual labeled saves come via POST .../versions with force).
+  await addVersionSnapshot(id, 'Autosave').catch(() => null)
 
   // Live sync: whole project replaced (e.g. another tab pushed its state).
   publishProjectEvent(id, {

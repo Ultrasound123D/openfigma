@@ -86,8 +86,32 @@ export interface ProjectState {
   guides: any[]
   /** PHASE 20 — flow starting points (whole-project round-trip) */
   flowStartingPoints?: any[]
+  /** PHASE 22 (C20) — version history snapshots (source: versionHistory.versions,
+   *  activeId ('current_version' = live), restore creates a new version) */
+  versions?: VersionSnapshot[]
+  /** PHASE 22 (C21) — libraries this project subscribed to (source:
+   *  fileSubscribedLibraryKeys / is_subscribed) */
+  subscribedLibraryKeys?: string[]
   createdAt: string
   updatedAt: string
+}
+
+/** PHASE 22 (C20) — one version-history snapshot (source: versionHistory
+ *  versions[] with id + label; restoring records a new version). */
+export interface VersionSnapshot {
+  id: string
+  label: string
+  at: string
+  /** Full document snapshot at capture time */
+  snapshot: {
+    elements: DesignElement[]
+    pages: Page[]
+    activePageId: string
+    guides: any[]
+    flowStartingPoints?: any[]
+    styles?: unknown
+    comments?: unknown
+  }
 }
 
 const DATA_DIR = path.join(process.cwd(), '.design-data')
@@ -259,4 +283,91 @@ export function createDefaultElement(type: string, overrides?: Partial<DesignEle
     ...(td.arrowHeadStyle !== undefined ? { arrowHeadStyle: td.arrowHeadStyle } : {}),
     ...overrides,
   }
+}
+
+// ---- PHASE 22 (C20) — version history helpers --------------------------------
+
+const MAX_VERSIONS = 20
+/** auto-snapshot throttle window (ms) — manual labeled saves bypass it */
+const AUTO_SNAPSHOT_MIN_GAP_MS = 60_000
+
+/** Capture the current document state as a new version (newest first).
+ *  Auto snapshots (label=null passed as 'Autosave') are throttled. */
+export async function addVersionSnapshot(
+  projectId: string,
+  label: string,
+  opts?: { force?: boolean }
+): Promise<VersionSnapshot | null> {
+  const project = await getProject(projectId)
+  if (!project) return null
+  const versions = project.versions || []
+  const last = versions[0]
+  if (!opts?.force && last && last.label === 'Autosave') {
+    const lastAt = new Date(last.at).getTime()
+    if (Date.now() - lastAt < AUTO_SNAPSHOT_MIN_GAP_MS) return null
+  }
+  const snapshot: VersionSnapshot['snapshot'] = {
+    elements: project.elements,
+    pages: project.pages,
+    activePageId: project.activePageId,
+    guides: project.guides,
+    flowStartingPoints: project.flowStartingPoints,
+  }
+  const version: VersionSnapshot = {
+    id: `ver-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    label,
+    at: new Date().toISOString(),
+    snapshot,
+  }
+  project.versions = [version, ...versions].slice(0, MAX_VERSIONS)
+  await saveProject(project)
+  return version
+}
+
+/** Restore a version: applies the snapshot to the live document AND records
+ *  the restore as a new version (Figma semantics — restore is itself a
+ *  versioned change; source: restoreVersionId + versions.unshift pattern). */
+export async function restoreVersion(
+  projectId: string,
+  versionId: string
+): Promise<{ ok: boolean; restoredAs?: VersionSnapshot; reason?: string }> {
+  const project = await getProject(projectId)
+  if (!project) return { ok: false, reason: 'Project not found' }
+  const version = (project.versions || []).find((v) => v.id === versionId)
+  if (!version) return { ok: false, reason: 'Version not found' }
+
+  project.elements = version.snapshot.elements
+  project.pages = version.snapshot.pages
+  project.activePageId = version.snapshot.activePageId
+  project.guides = version.snapshot.guides
+  project.flowStartingPoints = version.snapshot.flowStartingPoints
+  // keep the active page's per-page copy in sync (loads read pages[active])
+  project.pages = project.pages.map((p) =>
+    p.id === project.activePageId ? { ...p, elements: project.elements } : p
+  )
+
+  const restoredAs: VersionSnapshot = {
+    id: `ver-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    label: `Restored “${version.label}”`,
+    at: new Date().toISOString(),
+    snapshot: {
+      elements: project.elements,
+      pages: project.pages,
+      activePageId: project.activePageId,
+      guides: project.guides,
+      flowStartingPoints: project.flowStartingPoints,
+    },
+  }
+  project.versions = [restoredAs, ...(project.versions || [])].slice(0, MAX_VERSIONS)
+  await saveProject(project)
+  return { ok: true, restoredAs }
+}
+
+/** Version list WITHOUT the heavy snapshots (for the history panel). */
+export async function listVersions(
+  projectId: string
+): Promise<{ id: string; label: string; at: string }[]> {
+  const project = await getProject(projectId)
+  if (!project) return []
+  return (project.versions || []).map(({ id, label, at }) => ({ id, label, at }))
 }

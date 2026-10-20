@@ -262,6 +262,12 @@ export function TopBar() {
                 <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleExportFormat('WEBP')}>Export as WEBP</DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+            <DropdownMenuSeparator className="bg-[#3C3C3C]" />
+            {/* PHASE 22 (C20) — version history (source: versionHistory.versions,
+                restoreVersionId, activeCanvasEditModeType HISTORY) */}
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().setVersionHistoryOpen(!useEditorStore.getState().versionHistoryOpen)}>
+              Show Version History
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -346,6 +352,15 @@ export function TopBar() {
             </DropdownMenuItem>
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" disabled={!useEditorStore.getState().pixelPreview} onClick={() => { const s = useEditorStore.getState(); s.setPixelPreviewRetina(!s.pixelPreviewRetina) }}>
               Pixel Preview: Retina
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="bg-[#3C3C3C]" />
+            {/* PHASE 22 (C19) — multiplayer presence (source: multiplayer_cursors
+                visual_bell + toggle-viewport-overlay-hiding / temporarilyHideViewportOverlay) */}
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { const s = useEditorStore.getState(); s.setShowMultiplayerCursors(!s.showMultiplayerCursors) }}>
+              Multiplayer Cursors
+            </DropdownMenuItem>
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { const s = useEditorStore.getState(); s.setHideViewportOverlay(!s.hideViewportOverlay) }}>
+              Hide Viewport Overlay
             </DropdownMenuItem>
             <DropdownMenuSeparator className="bg-[#3C3C3C]" />
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={toggleLeftSidebar}>Toggle Left Panel</DropdownMenuItem>

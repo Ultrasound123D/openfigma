@@ -118,7 +118,11 @@ evidence, not opinion.
   zoom<100% (pixelated sampling); toggle in View menu + shortcut; retina mode
   follows devicePixelRatio (parity `activeCanvasRetinaMode`).
 
-### PHASE 22 — Collaboration & libraries
+### PHASE 22 — Collaboration & libraries ✅ DONE (2026-10-20)
+<!-- closed: C19 presence (SSE cursors/viewport/selection + View toggles), C20 version
+     history (labeled/manual+autosave snapshots, HISTORY preview, restore+new-version,
+     undo-able), C21 publish library (cross-project, subscribe, insert master+instance);
+     2 live-found bugs fixed (flush-before-capture, restore-undo history). See PROGRESS.md -->
 - **C19 presence over SSE**: broadcast cursor position + selection bounds
   (throttled); render remote cursors (name chip) + remote viewport overlay
   rectangles; `toggle-viewport-overlay-hiding` parity (View menu).

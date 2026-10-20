@@ -5,6 +5,8 @@ import { Plus, FileText, Palette, Type as TypeIcon, Sparkles, Component as Compo
 import { useEditorStore, DesignElement } from '@/store/editor-store'
 import { LayerPanel } from './LayerPanel'
 import { ComponentPanel } from './ComponentPanel'
+// PHASE 22 (C21) — published libraries section
+import { LibrariesPanel } from './LibrariesPanel'
 import { UITemplatesPanel } from './UITemplatesPanel'
 import { StylesPanel } from './StylesPanel'
 
@@ -235,6 +237,7 @@ export function LeftSidebar() {
           <div className="p-3 border-b border-[#383838]">
             <h3 className="text-[10px] font-semibold text-[#888] uppercase tracking-wider mb-2">Local Components</h3>
             <ComponentPanel />
+            <LibrariesPanel />
           </div>
 
           {/* PHASE 7 — Project styles */}
