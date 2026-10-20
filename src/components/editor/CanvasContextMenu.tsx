@@ -49,6 +49,10 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
     outlineStrokeSelection,
     flattenSelection,
     splitVectorSelection,
+    pasteOverSelection,
+    selectSimilar,
+    selectInverse,
+    clipboard,
   } = useEditorStore()
 
   const selectedElement = selectedElementIds.length === 1
@@ -63,6 +67,18 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
       case 'paste':
         pasteClipboard()
         pushHistory()
+        break
+      // PHASE 21 (E14) — paste over selection (source: PASTE_OVER_SELECTION=53)
+      case 'paste-over':
+        pasteOverSelection()
+        pushHistory()
+        break
+      // PHASE 21 (E15) — select similar / inverse + select-all-with children
+      case 'select-similar':
+        selectSimilar('similar')
+        break
+      case 'select-inverse':
+        selectInverse()
         break
       case 'delete':
         deleteSelectedElements()
@@ -240,6 +256,12 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
               Paste
               <ContextMenuShortcut>⌘V</ContextMenuShortcut>
             </ContextMenuItem>
+            {clipboard.length > 0 && (
+              <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('paste-over')}>
+                Paste Over Selection
+                <ContextMenuShortcut>⇧⌘V</ContextMenuShortcut>
+              </ContextMenuItem>
+            )}
             <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('duplicate')}>
               Duplicate
               <ContextMenuShortcut>⌘D</ContextMenuShortcut>
@@ -248,6 +270,34 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
               Delete
               <ContextMenuShortcut>⌫</ContextMenuShortcut>
             </ContextMenuItem>
+            {/* PHASE 21 (E15) — select similar / inverse + select-all-with submenu
+                (source children: select-same-{style,fill,stroke,effect,text,font,instance,variant}) */}
+            <ContextMenuSeparator className="bg-[#3C3C3C]" />
+            <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('select-similar')}>
+              Select Similar
+            </ContextMenuItem>
+            <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('select-inverse')}>
+              Select Inverse
+            </ContextMenuItem>
+            <ContextMenuSub>
+              <ContextMenuSubTrigger className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]">Select All With</ContextMenuSubTrigger>
+              <ContextMenuSubContent className="bg-[#2C2C2C] border-[#3C3C3C] text-[#CCC] min-w-[190px]">
+                {([
+                  ['style', 'Same style'],
+                  ['fill', 'Same fill'],
+                  ['stroke', 'Same stroke'],
+                  ['effect', 'Same effect'],
+                  ['text', 'Same type'],
+                  ['font', 'Same font'],
+                  ['instance', 'Same instance'],
+                  ['variant', 'Same variant'],
+                ] as const).map(([key, label]) => (
+                  <ContextMenuItem key={key} className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => selectSimilar(key)}>
+                    {label}
+                  </ContextMenuItem>
+                ))}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
             <ContextMenuSeparator className="bg-[#3C3C3C]" />
           </>
         )}

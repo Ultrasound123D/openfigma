@@ -10,6 +10,8 @@ import { Canvas } from './Canvas'
 import { RightSidebar } from './RightSidebar'
 import { Toolbar } from './Toolbar'
 import { PrototypePlayer } from './prototype/PrototypePlayer'
+// PHASE 21 (E16) — find & replace panel
+import { FindReplaceModal } from './FindReplaceModal'
 
 /**
  * UI3 chrome dimensions (PHASE 1, verified measurements — globals.css tokens):
@@ -60,6 +62,7 @@ export function EditorLayout() {
             <div className="relative w-full h-full">
               <Canvas />
               <Toolbar />
+              <FindReplaceModal />
             </div>
           </ResizablePanel>
           {rightSidebarVisible && (

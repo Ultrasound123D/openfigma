@@ -244,9 +244,38 @@ export function useCanvasKeyboard({
       }
 
       if (ctrl && e.key === 'c') { e.preventDefault(); state.copySelected() }
-      if (ctrl && e.key === 'v') { e.preventDefault(); state.pasteClipboard(); state.pushHistory() }
+      if (ctrl && e.key === 'v' && !e.shiftKey) { e.preventDefault(); state.pasteClipboard(); state.pushHistory() }
+      // PHASE 21 (E14) — ⇧⌘V paste over selection (source: PASTE_OVER_SELECTION=53)
+      if (ctrl && e.shiftKey && e.code === 'KeyV') {
+        e.preventDefault()
+        state.pasteOverSelection()
+        state.pushHistory()
+        return
+      }
       if (ctrl && e.key === 'd') { e.preventDefault(); state.duplicateSelectedElements(); state.pushHistory() }
       if (ctrl && e.key === 'a') { e.preventDefault(); state.selectAll() }
+
+      // PHASE 21 (E16) — ⌘F opens find & replace (source: FIND_AND_REPLACE=4;
+      // our app binding — the source shortcut registry is minified/not recovered)
+      if (ctrl && !e.shiftKey && e.code === 'KeyF') {
+        e.preventDefault()
+        state.setFindReplaceOpen(!state.findReplaceOpen)
+        return
+      }
+
+      // PHASE 21 (VW17/VW18) — ⇧⌘O outlines, ⇧⌘P pixel preview
+      // (source actions: toggle-outlines, toggle-pixel-preview; shortcut keys
+      // are Figma-documented — the source registry is minified)
+      if (ctrl && e.shiftKey && e.code === 'KeyO') {
+        e.preventDefault()
+        state.setOutlinesMode(!state.outlinesMode)
+        return
+      }
+      if (ctrl && e.shiftKey && e.code === 'KeyP') {
+        e.preventDefault()
+        state.setPixelPreview(!state.pixelPreview)
+        return
+      }
 
       if (ctrl && e.key === 'g' && !e.shiftKey) {
         e.preventDefault()

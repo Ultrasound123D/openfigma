@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useMemo } from 'react'
+import React, { useMemo, useRef } from 'react'
 import { useEditorStore } from '@/store/editor-store'
 import type { DesignElement } from '@/store/editor-store'
 import { findElementInList, getVectorNetwork, getAllElements, pathElementToSvgPath, isEvenOddFill } from '@/lib/element-utils'
@@ -30,6 +30,20 @@ import { booleanGroupPathD } from '@/lib/boolean-ops'
 import { onPathTargetD, onPathTargetTransform, splitLineIntoRuns, LINK_COLOR } from '@/lib/text-on-path'
 // PHASE 19 (T8) — emoji picker (comments composer)
 import { EmojiPickerButton } from './EmojiPicker'
+// PHASE 21 (VW18) — pixel preview raster layer
+import { PixelPreviewLayer } from './canvas/PixelPreviewLayer'
+
+// PHASE 21 (VW17) — outline mode context (source: showOutlines /
+// showOutlineHiddenLayers / showOutlineObjectBounds property bindings on the
+// toggle-outlines / toggle-outline-mode-hidden-layers / toggle-outline-mode-
+// object-bounds menu actions). Provided once by <Canvas>, consumed by every
+// CanvasElement without prop drilling.
+interface OutlinesState {
+  active: boolean
+  showHidden: boolean
+  showBounds: boolean
+}
+const OutlinesContext = React.createContext<OutlinesState>({ active: false, showHidden: false, showBounds: false })
 
 // Generate SVG defs for gradients, filters, clip paths, and image patterns
 function generateSVGDefs(elements: DesignElement[], zoom: number): React.ReactNode {
@@ -220,10 +234,34 @@ const CanvasElement = React.memo(function CanvasElement({
   onDoubleClick: (el: DesignElement, e: React.MouseEvent) => void
   viewportBounds: { minX: number; minY: number; maxX: number; maxY: number }
 }) {
-  if (!element.visible) return null
+  // PHASE 21 (VW17) — outline mode modifiers
+  const outlines = React.useContext(OutlinesContext)
 
   // Safe zoom - never NaN or zero, used throughout SVG rendering
   const safeZoom = isFinite(zoom) && zoom > 0.001 ? zoom : 1
+
+  if (!element.visible) {
+    // Outline mode + hidden-layers variant: hidden layers render as dashed
+    // outlines (source: showOutlineHiddenLayers). Children of a hidden parent
+    // are NOT recursed (documented scope decision).
+    if (outlines.active && outlines.showHidden) {
+      return (
+        <g
+          transform={`translate(${element.x}, ${element.y})`}
+          opacity={0.5}
+          pointerEvents="none"
+        >
+          <rect
+            x={0} y={0} width={element.width} height={element.height}
+            fill="none" stroke="#7F7F7F"
+            strokeWidth={1 / safeZoom}
+            strokeDasharray={`${4 / safeZoom} ${3 / safeZoom}`}
+          />
+        </g>
+      )
+    }
+    return null
+  }
 
   // Frustum culling for top-level elements
   if (!isElementInViewport(element, viewportBounds)) return null
@@ -254,12 +292,22 @@ const CanvasElement = React.memo(function CanvasElement({
   const effectiveChildren = getEffectiveChildren()
 
   const renderShape = (el: DesignElement, isChildRendering: boolean = false) => {
-    const fillAttr = getFillForElement(el, zoom)
-    const strokeAttr = el.stroke === 'transparent' ? 'none' : el.stroke
+    // PHASE 21 (VW17) — outline mode paint rules (Figma outline mode):
+    //   - fills are not rendered (text stays rendered)
+    //   - strokes render; unstroked shapes get a gray hairline outline
+    //   - effects (shadow/blur filters) are disabled
+    const isText = el.type === 'text'
+    const o = outlines
+    const fillAttr = o.active && !isText ? 'none' : getFillForElement(el, zoom)
+    const hasOwnStroke = el.stroke !== 'transparent' && el.stroke !== undefined
+    const strokeAttr = o.active && !isText
+      ? (hasOwnStroke ? el.stroke : '#7F7F7F')
+      : (el.stroke === 'transparent' ? 'none' : el.stroke)
+    const strokeWidthAttr = o.active && !isText && !hasOwnStroke ? 1 / safeZoom : el.strokeWidth
     const strokeDasharray = el.strokeStyle === 'dashed' ? `${6 / safeZoom} ${4 / safeZoom}` : el.strokeStyle === 'dotted' ? `${2 / safeZoom} ${2 / safeZoom}` : undefined
     const blendMode = el.blendMode && el.blendMode !== 'normal' ? el.blendMode : undefined
     const style: React.CSSProperties = blendMode ? { mixBlendMode: blendMode as React.CSSProperties['mixBlendMode'] } : {}
-    const filterAttr = isChildRendering ? undefined : getFilterAttr()
+    const filterAttr = o.active ? undefined : (isChildRendering ? undefined : getFilterAttr())
     const scaleX = el.flipH ? -1 : 1
     const scaleY = el.flipV ? -1 : 1
     const transform = (scaleX !== 1 || scaleY !== 1) ? `scale(${scaleX}, ${scaleY}) translate(${scaleX === -1 ? -el.width : 0}, ${scaleY === -1 ? -el.height : 0})` : undefined
@@ -283,7 +331,7 @@ const CanvasElement = React.memo(function CanvasElement({
               })}
               fill={fillAttr}
               stroke={strokeAttr}
-              strokeWidth={el.strokeWidth}
+              strokeWidth={strokeWidthAttr}
               strokeDasharray={strokeDasharray}
               opacity={el.opacity / 100}
               filter={filterAttr}
@@ -297,7 +345,7 @@ const CanvasElement = React.memo(function CanvasElement({
             x={0} y={0} width={el.width} height={el.height}
             fill={fillAttr}
             stroke={strokeAttr}
-            strokeWidth={el.strokeWidth}
+            strokeWidth={strokeWidthAttr}
             strokeDasharray={strokeDasharray}
             rx={el.cornerRadius || el.cornerRadiusTL || 0}
             ry={el.cornerRadius || el.cornerRadiusTL || 0}
@@ -316,7 +364,7 @@ const CanvasElement = React.memo(function CanvasElement({
               x={0} y={0} width={el.width} height={el.height}
               fill={fillAttr}
               stroke={strokeAttr}
-              strokeWidth={el.strokeWidth}
+              strokeWidth={strokeWidthAttr}
               rx={el.cornerRadius || 0}
               opacity={el.opacity / 100}
               transform={transform}
@@ -343,7 +391,7 @@ const CanvasElement = React.memo(function CanvasElement({
         const td = el.tableData
         if (!td) {
           return (
-            <rect x={0} y={0} width={el.width} height={el.height} fill={fillAttr} stroke={strokeAttr} strokeWidth={el.strokeWidth} opacity={el.opacity / 100} style={style} />
+            <rect x={0} y={0} width={el.width} height={el.height} fill={fillAttr} stroke={strokeAttr} strokeWidth={strokeWidthAttr} opacity={el.opacity / 100} style={style} />
           )
         }
         const gridStroke = el.stroke === 'transparent' ? '#383838' : el.stroke
@@ -390,7 +438,7 @@ const CanvasElement = React.memo(function CanvasElement({
         return (
           <g style={style} data-table={el.id}>
             <rect x={0} y={0} width={el.width} height={el.height} fill={fillAttr} opacity={el.opacity / 100} />
-            {td.headerRow && headerH > 0 && (
+            {!o.active && td.headerRow && headerH > 0 && (
               <rect x={0} y={0} width={el.width} height={headerH} fill="#2C2C2C" opacity={0.9} />
             )}
             <rect x={0.5} y={0.5} width={el.width - 1} height={el.height - 1} fill="none" stroke={gridStroke} strokeWidth={1} />
@@ -410,17 +458,21 @@ const CanvasElement = React.memo(function CanvasElement({
             <rect
               x={0} y={0} width={el.width} height={el.height}
               fill={fillAttr}
+              stroke={strokeAttr}
+              strokeWidth={strokeWidthAttr}
               rx={el.cornerRadius || 4}
               transform={transform}
               data-sticky-bg={el.id}
             />
-            {/* folded corner (bottom-right) */}
-            <path
-              d={`M ${el.width - fold} ${el.height} L ${el.width} ${el.height - fold} L ${el.width} ${el.height} Z`}
-              fill="#00000022"
-              transform={transform}
-              data-sticky-fold={el.id}
-            />
+            {/* folded corner (bottom-right) — paint detail, hidden in outline mode */}
+            {!o.active && (
+              <path
+                d={`M ${el.width - fold} ${el.height} L ${el.width} ${el.height - fold} L ${el.width} ${el.height} Z`}
+                fill="#00000022"
+                transform={transform}
+                data-sticky-fold={el.id}
+              />
+            )}
             {lines.map((l, i) => (
               <text
                 key={i}
@@ -448,7 +500,7 @@ const CanvasElement = React.memo(function CanvasElement({
                 fill={fillAttr}
                 fillRule={arcIsEvenOdd(el.arc) ? 'evenodd' : undefined}
                 stroke={strokeAttr}
-                strokeWidth={el.strokeWidth}
+                strokeWidth={strokeWidthAttr}
                 strokeLinejoin="round"
                 opacity={el.opacity / 100}
                 filter={filterAttr}
@@ -463,7 +515,7 @@ const CanvasElement = React.memo(function CanvasElement({
             cx={el.width / 2} cy={el.height / 2} rx={el.width / 2} ry={el.height / 2}
             fill={fillAttr}
             stroke={strokeAttr}
-            strokeWidth={el.strokeWidth}
+            strokeWidth={strokeWidthAttr}
             strokeDasharray={strokeDasharray}
             opacity={el.opacity / 100}
             filter={filterAttr}
@@ -767,7 +819,7 @@ const CanvasElement = React.memo(function CanvasElement({
             points={points.join(' ')}
             fill={fillAttr}
             stroke={strokeAttr}
-            strokeWidth={el.strokeWidth}
+            strokeWidth={strokeWidthAttr}
             opacity={el.opacity / 100}
             transform={transform}
             style={style}
@@ -789,7 +841,7 @@ const CanvasElement = React.memo(function CanvasElement({
             points={points.join(' ')}
             fill={fillAttr}
             stroke={strokeAttr}
-            strokeWidth={el.strokeWidth}
+            strokeWidth={strokeWidthAttr}
             opacity={el.opacity / 100}
             transform={transform}
             style={style}
@@ -828,7 +880,7 @@ const CanvasElement = React.memo(function CanvasElement({
               fill={fillAttr}
               fillRule="evenodd"
               stroke={strokeAttr}
-              strokeWidth={el.strokeWidth}
+              strokeWidth={strokeWidthAttr}
               strokeLinejoin="round"
               opacity={el.opacity / 100}
               filter={filterAttr}
@@ -841,7 +893,7 @@ const CanvasElement = React.memo(function CanvasElement({
             x={0} y={0} width={el.width} height={el.height}
             fill={fillAttr}
             stroke={strokeAttr}
-            strokeWidth={el.strokeWidth}
+            strokeWidth={strokeWidthAttr}
             rx={el.cornerRadius || 0}
             opacity={el.opacity / 100}
             style={style}
@@ -854,7 +906,7 @@ const CanvasElement = React.memo(function CanvasElement({
             x={0} y={0} width={el.width} height={el.height}
             fill={fillAttr}
             stroke={strokeAttr}
-            strokeWidth={el.strokeWidth}
+            strokeWidth={strokeWidthAttr}
             rx={el.cornerRadius || 0}
             opacity={el.opacity / 100}
             style={style}
@@ -898,6 +950,30 @@ const CanvasElement = React.memo(function CanvasElement({
 
       {/* Always render the frame/group's own shape (background + border) */}
       {(isFrame || isGroup) ? renderShape(element) : (!hasChildren && renderShape(element))}
+
+      {/* PHASE 21 (VW17) — outline mode: image/pattern fills render as a
+          crossed placeholder box (Figma outline-mode image placeholder). */}
+      {outlines.active && element.type !== 'text' && (() => {
+        const paints = element.fills || []
+        const hasRaster = paints.some((f) => (f.type === 'image' || f.type === 'pattern') && f.visible !== false)
+        if (!hasRaster) return null
+        return (
+          <g pointerEvents="none">
+            <line x1={0} y1={0} x2={element.width} y2={element.height} stroke="#7F7F7F" strokeWidth={1 / safeZoom} />
+            <line x1={element.width} y1={0} x2={0} y2={element.height} stroke="#7F7F7F" strokeWidth={1 / safeZoom} />
+          </g>
+        )
+      })()}
+
+      {/* PHASE 21 (VW17) — outline mode object-bounds variant: hairline box
+          around every object (source: showOutlineObjectBounds). */}
+      {outlines.active && outlines.showBounds && (
+        <rect
+          x={0} y={0} width={element.width} height={element.height}
+          fill="none" stroke="#7F7F7F" strokeWidth={1 / safeZoom}
+          pointerEvents="none"
+        />
+      )}
       
       {/* Text element visible frame (always visible) */}
       {element.type === 'text' && (
@@ -979,7 +1055,23 @@ const CanvasElement = React.memo(function CanvasElement({
         const groups: React.ReactNode[] = []
         let buffer: React.ReactNode[] = []
         for (const child of effectiveChildren) {
-          if (!child.visible) continue
+          // PHASE 21 (VW17) — outline mode + hidden-layers: hidden children show
+          // as dashed outlines (source: showOutlineHiddenLayers)
+          if (!child.visible) {
+            if (outlines.active && outlines.showHidden) {
+              buffer.push(
+                <g key={`hidden-${child.id}`} transform={`translate(${child.x}, ${child.y})`} opacity={0.5} pointerEvents="none">
+                  <rect
+                    x={0} y={0} width={child.width} height={child.height}
+                    fill="none" stroke="#7F7F7F"
+                    strokeWidth={1 / safeZoom}
+                    strokeDasharray={`${4 / safeZoom} ${3 / safeZoom}`}
+                  />
+                </g>
+              )
+            }
+            continue
+          }
           if (child.isMask) {
             const clipId = `mask-${element.id}-${child.id}`
             const clipShape = maskClipShape(child)
@@ -1118,6 +1210,14 @@ export function Canvas() {
   const guides = useEditorStore((s) => s.guides)
   const currentFrameId = useEditorStore((s) => s.currentFrameId)
   const exitFrame = useEditorStore((s) => s.exitFrame)
+  // PHASE 21 — view modes (VW17 outlines / VW18 pixel preview)
+  const outlinesMode = useEditorStore((s) => s.outlinesMode)
+  const outlineHiddenLayers = useEditorStore((s) => s.outlineHiddenLayers)
+  const outlineObjectBounds = useEditorStore((s) => s.outlineObjectBounds)
+  const pixelPreview = useEditorStore((s) => s.pixelPreview)
+  const pixelPreviewRetina = useEditorStore((s) => s.pixelPreviewRetina)
+  // Ref to the live scene SVG (pixel-preview rasterization source)
+  const sceneSvgRef = useRef<SVGSVGElement | null>(null)
 
   // --- P4 refactor: the component now composes focused hooks ---------------
   // viewport: pan / zoom / fit / wheel / space-panning / container size
@@ -1166,6 +1266,21 @@ export function Canvas() {
 
   const centerX = (containerSize.width || 0) / 2 + (isFinite(panX) ? panX : 0)
   const centerY = (containerSize.height || 0) / 2 + (isFinite(panY) ? panY : 0)
+
+  // PHASE 21 (VW17) — outline mode context value
+  const outlinesValue = useMemo<OutlinesState>(() => ({
+    active: outlinesMode,
+    showHidden: outlineHiddenLayers,
+    showBounds: outlineObjectBounds,
+  }), [outlinesMode, outlineHiddenLayers, outlineObjectBounds])
+
+  // PHASE 21 (VW18) — pixel preview is active when enabled AND zoom ≠ 100%
+  // (at exactly 100% the vector render already equals the 1x raster)
+  const pixelPreviewActive = pixelPreview && Math.abs(safeZoom - 1) > 1e-6
+
+  // Scene content version — bumps whenever the element tree changes so the
+  // pixel-preview raster re-renders (cheap JSON stamp; avoids deep compare)
+  const sceneVersion = useMemo(() => JSON.stringify(elements).length ^ Math.round(safeZoom * 100000), [elements, safeZoom])
 
   // Calculate viewport bounds for frustum culling
   const viewportBounds = useMemo(() => ({
@@ -1901,7 +2016,10 @@ export function Canvas() {
           onDrop={handleDrop}
           onDragOver={handleDragOver}
         >
+          {/* PHASE 21 (VW17) — outline-mode provider wraps the whole scene */}
+          <OutlinesContext.Provider value={outlinesValue}>
           <svg
+            ref={sceneSvgRef}
             className="w-full h-full canvas-svg-export"
             style={{ background: '#1E1E1E' }}
           >
@@ -1912,17 +2030,21 @@ export function Canvas() {
               {layoutGridEl}
               {originEl}
               {guidesEl}
-              {elements.map((el) => (
-                <CanvasElement
-                  key={el.id}
-                  element={el}
-                  zoom={safeZoom}
-                  selectedIds={selectedElementIds}
-                  onElementMouseDown={handleElementMouseDown}
-                  onDoubleClick={handleElementDoubleClick}
-                  viewportBounds={viewportBounds}
-                />
-              ))}
+              {/* PHASE 21 (VW18) — data-scene marks the pure scene subtree used
+                  by the pixel-preview rasterizer (overlays are excluded). */}
+              <g data-scene="1" style={pixelPreviewActive ? { visibility: 'hidden' } : undefined}>
+                {elements.map((el) => (
+                  <CanvasElement
+                    key={el.id}
+                    element={el}
+                    zoom={safeZoom}
+                    selectedIds={selectedElementIds}
+                    onElementMouseDown={handleElementMouseDown}
+                    onDoubleClick={handleElementDoubleClick}
+                    viewportBounds={viewportBounds}
+                  />
+                ))}
+              </g>
               {drawPreviewEl}
               {penPreviewEl}
               {pencilPreviewEl}
@@ -1950,6 +2072,21 @@ export function Canvas() {
               )}
             </g>
           </svg>
+          {/* PHASE 21 (VW18) — pixel preview raster overlay (scene hidden when active) */}
+          <PixelPreviewLayer
+            svgRef={sceneSvgRef}
+            active={pixelPreviewActive}
+            retina={pixelPreviewRetina}
+            zoom={safeZoom}
+            panX={panX}
+            panY={panY}
+            centerX={centerX}
+            centerY={centerY}
+            width={containerSize.width || 0}
+            height={containerSize.height || 0}
+            sceneVersion={sceneVersion}
+          />
+          </OutlinesContext.Provider>
         </div>
       </CanvasContextMenu>
 

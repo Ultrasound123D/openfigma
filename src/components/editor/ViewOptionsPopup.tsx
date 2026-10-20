@@ -35,6 +35,10 @@ export function ViewOptionsPopup({ onClose }: { onClose: () => void }) {
   const {
     showPixelGrid, showLayoutGrids, showGrid, snapToPixels, snapToElements, showRulers, rulerUnit, zoom,
     setShowPixelGrid, setShowLayoutGrids, setShowGrid, setSnapToPixels, setSnapToElements, setShowRulers, setRulerUnit,
+    // PHASE 21 — view modes (source: showOutlines / showOutlineHiddenLayers /
+    // showOutlineObjectBounds / activeCanvasPixelPreview / activeCanvasRetinaMode)
+    outlinesMode, outlineHiddenLayers, outlineObjectBounds, pixelPreview, pixelPreviewRetina,
+    setOutlinesMode, setOutlineHiddenLayers, setOutlineObjectBounds, setPixelPreview, setPixelPreviewRetina,
   } = useEditorStore()
   const ref = useRef<HTMLDivElement>(null)
 
@@ -68,6 +72,20 @@ export function ViewOptionsPopup({ onClose }: { onClose: () => void }) {
       <div className="h-px bg-[#3C3C3C] my-1" />
       <ToggleRow label="Snap to pixel grid" checked={snapToPixels} onChange={setSnapToPixels} shortcut="⇧⌘'" />
       <ToggleRow label="Snap to objects" checked={snapToElements} onChange={setSnapToElements} />
+      <div className="h-px bg-[#3C3C3C] my-1" />
+      {/* PHASE 21 (VW17) — outline mode toggles */}
+      <ToggleRow label="Outlines" checked={outlinesMode} onChange={setOutlinesMode} shortcut="⌘⇧O" />
+      {outlinesMode && (
+        <>
+          <ToggleRow label="Hidden layers" checked={outlineHiddenLayers} onChange={setOutlineHiddenLayers} />
+          <ToggleRow label="Object bounds" checked={outlineObjectBounds} onChange={setOutlineObjectBounds} />
+        </>
+      )}
+      {/* PHASE 21 (VW18) — pixel preview toggles */}
+      <ToggleRow label="Pixel preview" checked={pixelPreview} onChange={setPixelPreview} shortcut="⌘⇧P" />
+      {pixelPreview && (
+        <ToggleRow label="Retina pixel preview" checked={pixelPreviewRetina} onChange={setPixelPreviewRetina} />
+      )}
       <div className="h-px bg-[#3C3C3C] my-1" />
       <ToggleRow label="Rulers" checked={showRulers} onChange={setShowRulers} shortcut="⇧R" />
       <div className="flex items-center gap-2 px-2.5 py-1.5">

@@ -275,10 +275,41 @@ export function TopBar() {
             <DropdownMenuSeparator className="bg-[#3C3C3C]" />
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().copySelected()}>Copy<DropdownMenuShortcut>⌘C</DropdownMenuShortcut></DropdownMenuItem>
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { pushHistory(); useEditorStore.getState().pasteClipboard() }}>Paste<DropdownMenuShortcut>⌘V</DropdownMenuShortcut></DropdownMenuItem>
+            {/* PHASE 21 (E14) — paste over selection (source: PASTE_OVER_SELECTION=53,
+                action "paste-over-selection", is_edit:!0). Shortcut: Figma-documented
+                ⇧⌘V (not source-extracted — registry is minified). */}
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { pushHistory(); useEditorStore.getState().pasteOverSelection() }}>Paste Over Selection<DropdownMenuShortcut>⇧⌘V</DropdownMenuShortcut></DropdownMenuItem>
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { pushHistory(); useEditorStore.getState().duplicateSelectedElements() }}>Duplicate<DropdownMenuShortcut>⌘D</DropdownMenuShortcut></DropdownMenuItem>
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { pushHistory(); useEditorStore.getState().deleteSelectedElements() }}>Delete<DropdownMenuShortcut>⌫</DropdownMenuShortcut></DropdownMenuItem>
             <DropdownMenuSeparator className="bg-[#3C3C3C]" />
+            {/* PHASE 21 (E16) — find & replace (source: FIND_AND_REPLACE=4;
+                "load all pages before search"). No source-extractable shortcut. */}
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().setFindReplaceOpen(true)}>Find and Replace…</DropdownMenuItem>
+            <DropdownMenuSeparator className="bg-[#3C3C3C]" />
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().selectAll()}>Select All<DropdownMenuShortcut>⌘A</DropdownMenuShortcut></DropdownMenuItem>
+            {/* PHASE 21 (E15) — select similar / inverse + select-all-with submenu
+                (source children: select-same-{style,fill,stroke,effect,text,font,instance,variant}) */}
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().selectSimilar('similar')}>Select Similar</DropdownMenuItem>
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().selectInverse()}>Select Inverse</DropdownMenuItem>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]">Select All With</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="bg-[#2C2C2C] border-[#3C3C3C] text-[#CCCCCC] min-w-[190px]">
+                {([
+                  ['style', 'Same style'],
+                  ['fill', 'Same fill'],
+                  ['stroke', 'Same stroke'],
+                  ['effect', 'Same effect'],
+                  ['text', 'Same type'],
+                  ['font', 'Same font'],
+                  ['instance', 'Same instance'],
+                  ['variant', 'Same variant'],
+                ] as const).map(([key, label]) => (
+                  <DropdownMenuItem key={key} className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().selectSimilar(key)}>
+                    {label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -295,6 +326,27 @@ export function TopBar() {
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().setShowRulers(!useEditorStore.getState().showRulers)}>Toggle Rulers</DropdownMenuItem>
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().setSnapToGrid(!useEditorStore.getState().snapToGrid)}>Toggle Snap to Grid</DropdownMenuItem>
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().setSnapToElements(!useEditorStore.getState().snapToElements)}>Toggle Snap to Elements</DropdownMenuItem>
+            <DropdownMenuSeparator className="bg-[#3C3C3C]" />
+            {/* PHASE 21 (VW17) — outline mode + variants (source: toggle-outlines,
+                toggle-outline-mode-hidden-layers, toggle-outline-mode-object-bounds).
+                Shortcut ⌘⇧O is Figma-documented (registry minified in source). */}
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { const s = useEditorStore.getState(); s.setOutlinesMode(!s.outlinesMode) }}>
+              Outlines<DropdownMenuShortcut>⌘⇧O</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" disabled={!useEditorStore.getState().outlinesMode} onClick={() => { const s = useEditorStore.getState(); s.setOutlineHiddenLayers(!s.outlineHiddenLayers) }}>
+              Outlines: Hidden Layers
+            </DropdownMenuItem>
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" disabled={!useEditorStore.getState().outlinesMode} onClick={() => { const s = useEditorStore.getState(); s.setOutlineObjectBounds(!s.outlineObjectBounds) }}>
+              Outlines: Object Bounds
+            </DropdownMenuItem>
+            {/* PHASE 21 (VW18) — pixel preview + retina (source: toggle-pixel-preview /
+                activeCanvasPixelPreview, activeCanvasRetinaMode). ⌘⇧P Figma-documented. */}
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { const s = useEditorStore.getState(); s.setPixelPreview(!s.pixelPreview) }}>
+              Pixel Preview<DropdownMenuShortcut>⌘⇧P</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" disabled={!useEditorStore.getState().pixelPreview} onClick={() => { const s = useEditorStore.getState(); s.setPixelPreviewRetina(!s.pixelPreviewRetina) }}>
+              Pixel Preview: Retina
+            </DropdownMenuItem>
             <DropdownMenuSeparator className="bg-[#3C3C3C]" />
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={toggleLeftSidebar}>Toggle Left Panel</DropdownMenuItem>
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={toggleRightSidebar}>Toggle Right Panel</DropdownMenuItem>

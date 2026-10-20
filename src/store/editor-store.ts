@@ -525,6 +525,18 @@ interface EditorState {
   showLayoutGrids: boolean
   snapToPixels: boolean
   rulerUnit: 'px' | 'in' | 'cm' | 'mm'
+  // PHASE 21 (VW17) — outline mode (source: toggle-outlines → showOutlines,
+  //  toggle-outline-mode-hidden-layers → showOutlineHiddenLayers,
+  //  toggle-outline-mode-object-bounds → showOutlineObjectBounds)
+  outlinesMode: boolean
+  outlineHiddenLayers: boolean
+  outlineObjectBounds: boolean
+  // PHASE 21 (VW18) — pixel preview (source: toggle-pixel-preview →
+  //  activeCanvasPixelPreview, activeCanvasRetinaMode)
+  pixelPreview: boolean
+  pixelPreviewRetina: boolean
+  // PHASE 21 (E16) — find & replace panel open state (source: FIND_AND_REPLACE=4)
+  findReplaceOpen: boolean
   
   // Guides
   guides: Guide[]
@@ -781,6 +793,31 @@ interface EditorState {
   setShowLayoutGrids: (show: boolean) => void
   setSnapToPixels: (snap: boolean) => void
   setRulerUnit: (unit: 'px' | 'in' | 'cm' | 'mm') => void
+
+  // Actions - View modes (PHASE 21)
+  setOutlinesMode: (v: boolean) => void
+  setOutlineHiddenLayers: (v: boolean) => void
+  setOutlineObjectBounds: (v: boolean) => void
+  setPixelPreview: (v: boolean) => void
+  setPixelPreviewRetina: (v: boolean) => void
+  setFindReplaceOpen: (v: boolean) => void
+
+  // Actions - Edit parity (PHASE 21)
+  /** E14 — paste clipboard over selection at the selection's position,
+   *  replacing it (source: PASTE_OVER_SELECTION=53, action "paste-over-selection",
+   *  is_edit:!0). */
+  pasteOverSelection: () => void
+  /** E15 — select all elements matching the reference (last selected) element
+   *  by the given criteria. Source children of "select-all-with-menu-options":
+   *  select-same-{style,fill,stroke,effect,text,font,instance,variant}; plus
+   *  standalone "select-similar" (≈ type+paint match) and "select-inverse".
+   *  Returns the new selection size. */
+  selectSimilar: (criteria: 'style' | 'fill' | 'stroke' | 'effect' | 'text' | 'font' | 'instance' | 'variant' | 'similar') => number
+  /** E15 — invert the current selection among top-level page objects. */
+  selectInverse: () => void
+  /** E16 — update an element on any page (find/replace across pages; active
+   *  page goes through the live elements list). */
+  updateElementOnPage: (pageId: string, elementId: string, updates: Partial<DesignElement>) => void
 
   // Actions - Constraints (PHASE 9)
   /** Resize a frame and reposition/resize its children according to their
@@ -1479,6 +1516,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   showLayoutGrids: true,
   snapToPixels: true,
   rulerUnit: 'px' as 'px' | 'in' | 'cm' | 'mm',
+  // PHASE 21 — view modes (source-exact defaults: off)
+  outlinesMode: false,
+  outlineHiddenLayers: false,
+  outlineObjectBounds: false,
+  pixelPreview: false,
+  pixelPreviewRetina: false,
+  findReplaceOpen: false,
   // PHASE 7 — project styles
   styles: [],
   // PHASE 16 — comments
@@ -1515,6 +1559,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   overlayStack: [],
   previewHistory: [],
 
+  // PHASE 21 — view mode setters + find/replace panel
+  setOutlinesMode: (v) => set({ outlinesMode: v }),
+  setOutlineHiddenLayers: (v) => set({ outlineHiddenLayers: v }),
+  setOutlineObjectBounds: (v) => set({ outlineObjectBounds: v }),
+  setPixelPreview: (v) => set({ pixelPreview: v }),
+  setPixelPreviewRetina: (v) => set({ pixelPreviewRetina: v }),
+  setFindReplaceOpen: (v) => set({ findReplaceOpen: v }),
   setSelectedElementIds: (ids) => set({ selectedElementIds: ids }),
   
   toggleElementSelection: (id) =>
@@ -2226,6 +2277,124 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         .filter((el) => !el.locked)
         .map((el) => el.id),
     })),
+
+  // ---- PHASE 21 (E14/E15) — edit parity actions ----
+  /** Union bbox (page coords) of a top-level element list. */
+  pasteOverSelection: () => {
+    const state = get()
+    if (state.clipboard.length === 0 || state.selectedElementIds.length === 0) return
+    const selEls = state.selectedElementIds
+      .map((id) => findElementInList(state.elements, id))
+      .filter(Boolean) as DesignElement[]
+    if (selEls.length === 0) return
+
+    const boxOf = (els: DesignElement[]) => {
+      const x = Math.min(...els.map((e) => e.x))
+      const y = Math.min(...els.map((e) => e.y))
+      const r = Math.max(...els.map((e) => e.x + e.width))
+      const b = Math.max(...els.map((e) => e.y + e.height))
+      return { x, y, r, b }
+    }
+    const selBox = boxOf(selEls)
+    const clipBox = boxOf(state.clipboard)
+    const dx = selBox.x - clipBox.x
+    const dy = selBox.y - clipBox.y
+
+    const copies = state.clipboard.map((el) => regenerateIds({ ...el, x: el.x + dx, y: el.y + dy }))
+
+    // remove selection; insert copies at the topmost selection slot (z-order parity)
+    const removeIds = new Set(state.selectedElementIds)
+    const kept = state.elements.filter((el) => !removeIds.has(el.id))
+    let insertIdx = -1
+    for (let i = state.elements.length - 1; i >= 0; i--) {
+      if (removeIds.has(state.elements[i].id)) { insertIdx = i; break }
+    }
+    const nextElements = [...kept]
+    const at = insertIdx >= 0 ? Math.max(0, Math.min(insertIdx, nextElements.length)) : nextElements.length
+    nextElements.splice(at, 0, ...copies)
+
+    set({
+      elements: nextElements,
+      selectedElementIds: copies.map((el) => el.id),
+      isDirty: true,
+    })
+  },
+
+  selectSimilar: (criteria) => {
+    const state = get()
+    if (state.selectedElementIds.length === 0) return 0
+    const ref = findElementInList(state.elements, state.selectedElementIds[state.selectedElementIds.length - 1])
+    if (!ref) return 0
+
+    // paint signatures (stable JSON of visible paints)
+    const fillSig = (el: DesignElement) => {
+      const f = (el.fills || []).filter((x) => x.visible !== false)
+      if (f.length) {
+        return JSON.stringify(f.map((x) => x.type === 'solid'
+          ? ['solid', x.color, x.opacity]
+          : [x.type, x.gradientStops || null, x.opacity, x.scaleMode || null]))
+      }
+      return JSON.stringify(['legacy', el.fill])
+    }
+    const strokeSig = (el: DesignElement) => {
+      const st = (el.strokes || []).filter((x) => x.visible !== false)
+      if (st.length) return JSON.stringify(st.map((x) => [x.color, x.width, x.style]))
+      return JSON.stringify(['legacy', el.stroke, el.strokeWidth])
+    }
+    const effectSig = (el: DesignElement) =>
+      JSON.stringify([...(el.shadows || []).map((s) => s.type), ...(el.blurs || []).map((b) => b.type)])
+    const styleIdsOf = (el: DesignElement) =>
+      [el.fillStyleId, el.strokeStyleId, el.textStyleId, el.effectStyleId].filter(Boolean) as string[]
+
+    const refStyleIds = styleIdsOf(ref)
+    const same = (el: DesignElement): boolean => {
+      if (el.id === ref.id) return true
+      switch (criteria) {
+        case 'fill': return fillSig(el) === fillSig(ref)
+        case 'stroke': return strokeSig(el) === strokeSig(ref)
+        case 'effect': return effectSig(el) === effectSig(ref)
+        case 'text': return el.type === 'text'
+        case 'font': return el.type === 'text' && (el.fontFamily || 'Inter') === (ref.fontFamily || 'Inter')
+        case 'instance': return !!el.componentId && el.componentId === ref.componentId
+        case 'variant': return !!el.componentSetId && el.componentSetId === ref.componentSetId
+        case 'style': {
+          if (refStyleIds.length === 0) return false
+          const ids = styleIdsOf(el)
+          return ids.some((id) => refStyleIds.includes(id))
+        }
+        case 'similar': return el.type === ref.type && fillSig(el) === fillSig(ref) && strokeSig(el) === strokeSig(ref)
+      }
+    }
+
+    const ids = getAllElements(state.elements)
+      .filter((el) => !el.locked && same(el))
+      .map((el) => el.id)
+    set({ selectedElementIds: ids })
+    return ids.length
+  },
+
+  selectInverse: () =>
+    set((state) => {
+      const sel = new Set(state.selectedElementIds)
+      return {
+        selectedElementIds: state.elements
+          .filter((el) => !el.locked && !sel.has(el.id))
+          .map((el) => el.id),
+      }
+    }),
+
+  updateElementOnPage: (pageId, elementId, updates) =>
+    set((state) => {
+      if (pageId === state.activePageId) {
+        return { elements: updateElementInList(state.elements, elementId, updates), isDirty: true }
+      }
+      return {
+        pages: state.pages.map((p) =>
+          p.id === pageId ? { ...p, elements: updateElementInList(p.elements, elementId, updates) } : p
+        ),
+        isDirty: true,
+      }
+    }),
 
   // ---- PHASE 6: Boolean operations & masks (REBUILT per PORT-PLAN-6-11) ----
   applyBooleanOperation: (op) => {

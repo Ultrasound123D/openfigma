@@ -50,3 +50,26 @@
 - Wave-2 plan (PORT-PLAN-17-22.md): 21 evidence-verified gaps; rejected items documented
   (voice = AI-chat only; search-palette SRC-ABSENT; bend subsumed by vector-edit; .fig =
   URL false positives; annotate = a11y lint; blur already ported — audit pattern too literal).
+
+### DECISION-016 — PHASE 21: view-mode architecture (context not props) + pixel-preview single-mapping
+- Outline mode reaches every CanvasElement (incl. renderShape's child rendering)
+  via React context — prop drilling through the memoized renderer was rejected
+  (renderShape is a closure inside CanvasElement, not a component).
+- Pixel preview: the standalone raster SVG applies the canvas mapping ONCE
+  through its viewBox ((c−v)·raster/vSize ≡ translate(center)·scale(zoom)).
+  A wrapper transform group + viewBox applies it TWICE — verified as a live
+  bug (content bbox shifted ~300px, zoom² shrink) before the fix.
+- Scene <image> fills are inlined to data: URIs with a cache map: SVG-as-image
+  secure-static mode blocks blob:/http: references (verified: raster was blank
+  for image content otherwise).
+- The live scene group is hidden with visibility while its raster clone must
+  render — the clone strips the inline style (verified blank-raster bug).
+- Find/replace across pages: active page reads live elements; other pages read
+  pages[].elements (which setActivePage keeps fresh on switch). Replace writes
+  go through a new updateElementOnPage (single source of truth per page).
+- Shortcut provenance (STRICT): ⇧⌘V / ⌘⇧O / ⌘⇧P / ⌘F are Figma-documented or
+  app-chosen bindings — the source keyboard-shortcut registry is minified and
+  NOT source-extracted; each is marked in code comments + PROGRESS.
+- scripts/p21_server.sh now mirrors p17–p20 (static copy) — the standalone
+  server without .next/static serves CSS 404 and the layout collapses to the
+  SVG default 300×150 (diagnosed live; baseline HEAD reproduced it too).

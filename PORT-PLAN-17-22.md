@@ -101,7 +101,8 @@ evidence, not opinion.
   editor (on-canvas input per `flowStartingPointNameInput`); presentation
   starts from first starting point (`getEffectivePrototypeStartNodeId`).
 
-### PHASE 21 — Edit & view parity
+### PHASE 21 — Edit & view parity ✅ DONE (2026-10-20)
+<!-- closed: paste-over + select-all-with(8)/similar/inverse + find/replace(all-pages) + outlines(+hidden/bounds) + pixel preview(+retina); see PROGRESS.md -->
 - **E14 paste-over-selection**: paste clipboard style as overlay onto selected
   (replaces selection content with clipboard nodes, keeping ids/position).
 - **E15 select-all-with**: submenu (same: fill / stroke / effects / opacity /
