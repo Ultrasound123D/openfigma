@@ -35,6 +35,8 @@ export function ViewOptionsPopup({ onClose }: { onClose: () => void }) {
   const {
     showPixelGrid, showLayoutGrids, showGrid, snapToPixels, snapToElements, showRulers, rulerUnit, zoom,
     setShowPixelGrid, setShowLayoutGrids, setShowGrid, setSnapToPixels, setSnapToElements, setShowRulers, setRulerUnit,
+    // PHASE 23 (F11/F14) — nudge amount + comment visibility
+    nudgeAmount, setNudgeAmount, showComments, setShowComments,
     // PHASE 21 — view modes (source: showOutlines / showOutlineHiddenLayers /
     // showOutlineObjectBounds / activeCanvasPixelPreview / activeCanvasRetinaMode)
     outlinesMode, outlineHiddenLayers, outlineObjectBounds, pixelPreview, pixelPreviewRetina,
@@ -72,6 +74,27 @@ export function ViewOptionsPopup({ onClose }: { onClose: () => void }) {
       <div className="h-px bg-[#3C3C3C] my-1" />
       <ToggleRow label="Snap to pixel grid" checked={snapToPixels} onChange={setSnapToPixels} shortcut="⇧⌘'" />
       <ToggleRow label="Snap to objects" checked={snapToElements} onChange={setSnapToElements} />
+      {/* PHASE 23 (F11) — nudge amounts (source: nudgeAmountPicker preferences,
+          figma_app). Arrows = small step, Shift+arrows = large step. */}
+      <div className="flex items-center gap-2 px-2.5 py-1.5">
+        <span className="text-[11px] text-[#DDD] flex-1">Nudge amount</span>
+        <input
+          type="number" min={1} step={1}
+          value={nudgeAmount.small}
+          onChange={(e) => setNudgeAmount({ ...nudgeAmount, small: Math.max(1, Number(e.target.value) || 1) })}
+          className="w-10 h-6 px-1 text-[11px] text-center border border-[#383838] rounded bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF]"
+          title="Small nudge (arrow keys)"
+        />
+        <input
+          type="number" min={1} step={1}
+          value={nudgeAmount.large}
+          onChange={(e) => setNudgeAmount({ ...nudgeAmount, large: Math.max(1, Number(e.target.value) || 1) })}
+          className="w-10 h-6 px-1 text-[11px] text-center border border-[#383838] rounded bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF]"
+          title="Large nudge (Shift + arrow keys)"
+        />
+      </div>
+      {/* PHASE 23 (F14) — comment visibility (source: toggle-show-comments) */}
+      <ToggleRow label="Show comments" checked={showComments} onChange={setShowComments} />
       <div className="h-px bg-[#3C3C3C] my-1" />
       {/* PHASE 21 (VW17) — outline mode toggles */}
       <ToggleRow label="Outlines" checked={outlinesMode} onChange={setOutlinesMode} shortcut="⌘⇧O" />

@@ -151,3 +151,23 @@
 - tsc صفر / eslint صفر / build ناجح (14 مسارًا — +presence/versions/restore/libraries×2).
 
 > **اكتملت الموجة الثانية للنقل الكامل** — المراحل 0←22: كل فجوات التدقيق الـ21 المثبتة بالمصدر مغلقة (PORT-PLAN-17-22 كاملًا).
+
+## PHASE 23 — الموجة الختامية: فجوات التدقيق النهائي (2026-10-20)
+- **منهجية التدقيق النهائي** (analysis/final_audit_report.md): ثلاث أسطح بحث جديدة بعد إغلاق PORT-PLAN-17-22 — (أ) كل سلاسل action في المصدر (605 فريدة)، (ب) 28 عائلة كلمات مفتاحية مرشّحة، (ج) تجربة ضابطة لفكّ شفرة `allowedEditorTypes` (أثبتت أن سجل 9456 هو لسطوح الجيل الجديد وأن دليل ملفات التصميم هو figma_app + وحدة قائمة السياق 5018). النتيجة: **14 فجوة مثبتة** + 3 عناصر كانت مزيفة وأُثبت منقولها أثناء التدقيق (أداة التحجيم K بالمرحلة 11، Frame Selection كان مضمّناً في لوحة المفاتيح — استُبدل بإجراء المخزن، قفل نسبة الأبعاد) + رفض موثّق لـ 12 عنصراً (swap-nodes/remove-interactions/separate-text-path/main-component/duplicate-in-place/paste-to-replace/ruler-units/table-ops/video/copy-as-css-ios-android/show-rotation-origin UNKNOWN).
+- **F1–F4 تصديرات الحافظة** (المصدر: 5018 copy-as-png ×12 / copy-as-svg ×10 / copy-text ×10 / copy-layer-name ×6): lib/clipboard-io.ts — Copy as PNG عبر ClipboardItem بصورة نقطية حقيقية من خط التصدير القائم (⇧⌘C)، Copy as SVG (نص متسلسل)، Copy Text (نص محدد)، Copy Layer Name. مداخل Edit + قائمة السياق.
+- **F5 نسخ/لصق الخصائص** (copy-properties/paste-properties): حافظة خصائص في المخزن (مجموعة طلاء/مظهر/نص/شكل — بلا موضع/حجم عمداً) + نسخ من الأول ولصق على كل التحديد. 
+- **F6 اللصق هنا** (paste-here): pasteClipboardAt(x,y) — الحافظة تهبط بحيث يقع ركنها الأعلى الأيسر على نقطة النقر بالضبط (مدخل قائمة سياق بشرط حافظة غير فارغة).
+- **F7 فتح الكل** (unlock-all ×8): فتح كل عنصر في الصفحة تكرارياً بضغطة تاريخ واحدة (مدخل شرطي عند وجود مقفول).
+- **F8 ملاءمة الحجم** (resize-to-fit ×20 في figma_app): زر Fit في قسم Size — الحاويات تتمدد لصندوق أبنائها (مع إزاحة الأبناء للحفاظ على الثبات البصري)، والنص يفوّض إلى applyTextAutoSize.
+- **F9 حسابات حقول الأرقام** (evaluateMathExpression): lib/math-input.ts محلل حسابي آمن بلا eval (+ - * / % أقواس وطرائق نسبية +20/*2) + PropertyInput بمسودة محلية أثناء التركيز (الأرقام العادية تبقى حية، التعبير يُحل عند Enter/blur، المسودة الفاسدة تحفظ آخر قيمة).
+- **F10 تحديد إطارات** (frame-selection + convert-selected-nodes-to-frame): إجراء مخزن يستبدل التنفيذ المضمّن القديم في لوحة المفاتيح (والآن يحل الإحداثيات المطلقة للأبناء المتداخلين) + ⌥⌘G + Edit + قائمة سياق.
+- **F11 مقدار التنقيط** (nudgeAmountPicker): nudgeAmount {small,large} في المخزن (افتراضي 1/10) + أسهم اللوحة وحقول اللوحة تقرأانه + قسمان في ViewOptions.
+- **F12 كشف أثناء التدقيق**: Toggle Snap to Elements موجود أصلاً في View — أُسقط من الفجوات.
+- **F13 نافذة الاختصارات** (keyboard_shortcuts_modal): ShortcutsModal بجدول مجموعات (أدوات/تحرير/تحويل/عرض/نص/لوحة) + بحث حي + ⌘/ + مدخل View. النطاق موثّق: قائمة مرجعية فقط (إعادة الربط/التثبيت خارج النطاق لغياب الدليل).
+- **F14 إظهار التعليقات** (toggle-show-comments ×2): showComments في المخزن يبوب دبابيس التعليق والمؤلف بالكامل + View + ViewOptions.
+- **F15 إضافة متغير** (add-variant ×16): addVariantToSet — يكرر المصدر (المتغير المحدد داخل المجموعة أو الأول) بقيمة جديدة V{n} لأول خاصية متغير، ويُنشئ خاصية "Variant" تلقائياً عند غيابها + قائمة سياق للمجموعات + زر في ComponentPanel.
+- **التحقق (5 جولات، 33 فحصاً)**: tsc 0 / eslint 0 (بعد إصلاح مذكّر حالة داخل تأثير بموجب قاعدة set-state-in-effect ونقل hook الاختبار لمستوى الوحدة حفاظاً على memoization مفعل React Compiler) / build ناجح. حياً: Paste Here هبط عند (500,400) بالضبط؛ Unlock All فتح الجميع؛ Frame التف (100,100,320×80, طفلان)؛ Fit أعاد 320 بعد تضخيم 800؛ الأسهم 5 ثم Shift 50 (وفق التفضيل)؛ ⌘/ يفتح والبحث "frame" يرشّح (لا Undo/Zoom) وEsc يغلق؛ toggle التعليقات يقلب ويعيد؛ المجموعة 2←3 أبناء بقيمة V3 ومجموعة الخصائص {Variant:[V3]}؛ Edit يعرض المداخل السبعة؛ قائمة السياق تعرضها (Paste Here/Unlock All ظرفياً — مخفيتان بلا حافظة/قفل، وهو السلوك المقصود)؛ **لصق الخصائص عبر قائمة سياق حقيقية أعاد تلوين الهدف أخضر #14AE5C**؛ **Copy as SVG كتب `<svg xmlns=…>` للحافظة**؛ **Copy as PNG أنتج blob حقيقي (1945 بايت، image/png)**. **VLM أكّد 4/4 لقطات** (قائمة سياق بخمس مداخل + Edit الكامل + نافذة الاختصارات ببحثها + شجرة الطبقات "Btn / V3" بثلاثة متغيرات).
+- سكربتات: scripts/p23_server.sh + p23_verify{,2,3,4,5}.sh + p23_shots.sh + scripts/final_audit*.py + verify_scoping.py + control_experiment.py + design_shell_evidence.py. اللقطات: download/openfigma-p23-{context-menu,edit-menu,shortcuts,add-variant}.png
+- خطاف اختبار window.__openfigmaP23 (نمط المراحل 19/22).
+
+> **اكتمل النقل الشامل** — المراحل 0←23: كل ميزة محرّر ملفات التصميم القابلة للإثبات في المصدر منقولة، وكل رفض موثّق بالدليل (final_audit_report.md). فجوة معرفية وحيدة متبقية: show-rotation-origin (دلالة UNKNOWN).

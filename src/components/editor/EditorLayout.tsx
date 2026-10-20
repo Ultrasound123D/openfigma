@@ -12,6 +12,8 @@ import { Toolbar } from './Toolbar'
 import { PrototypePlayer } from './prototype/PrototypePlayer'
 // PHASE 21 (E16) — find & replace panel
 import { FindReplaceModal } from './FindReplaceModal'
+// PHASE 23 (F13) — keyboard shortcuts modal (source: keyboard_shortcuts_modal)
+import { ShortcutsModal } from './ShortcutsModal'
 // PHASE 22 (C20) — version history panel
 import { VersionHistoryPanel } from './VersionHistoryPanel'
 
@@ -65,6 +67,7 @@ export function EditorLayout() {
               <Canvas />
               <Toolbar />
               <FindReplaceModal />
+              <ShortcutsModal />
               <VersionHistoryPanel />
             </div>
           </ResizablePanel>

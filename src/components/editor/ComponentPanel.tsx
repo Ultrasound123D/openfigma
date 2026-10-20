@@ -6,7 +6,7 @@ import { useEditorStore, ComponentPropertyDefinition, ComponentPropertyType, Com
 import { findElementInList } from '@/lib/element-utils'
 
 export function ComponentPanel() {
-  const { elements, createInstance, resetOverrides, detachInstance, addComponent, addComponentSet, selectedElementIds, pushHistory, addComponentPropertyDefinition, editComponentPropertyDefinition, deleteComponentPropertyDefinition, addVariantPropertyDefinition, setVariantPropertyValue, setComponentPropertyValue, swapInstanceComponent, setDefaultVariant } = useEditorStore()
+  const { elements, createInstance, resetOverrides, detachInstance, addComponent, addComponentSet, selectedElementIds, pushHistory, addComponentPropertyDefinition, editComponentPropertyDefinition, deleteComponentPropertyDefinition, addVariantPropertyDefinition, setVariantPropertyValue, setComponentPropertyValue, swapInstanceComponent, setDefaultVariant, addVariantToSet } = useEditorStore()
 
   const components = elements.filter(el => el.isComponent || el.isComponentSet)
   const instances = elements.filter(el => el.componentId)
@@ -271,7 +271,19 @@ export function ComponentPanel() {
       {/* Variant list inside component set */}
       {selectedElement?.isComponentSet && selectedElement.children && (
         <div>
-          <h4 className="text-[10px] font-semibold text-[#A259FF] uppercase tracking-wider mb-1">Variants ({selectedElement.children.length})</h4>
+          <div className="flex items-center justify-between mb-1">
+            <h4 className="text-[10px] font-semibold text-[#A259FF] uppercase tracking-wider">Variants ({selectedElement.children.length})</h4>
+            {/* PHASE 23 (F15) — add variant (source: add-variant, figma_app ×16):
+                duplicates a component with a fresh value for the first variant
+                property (auto-creates "Variant" when the set has none). */}
+            <button
+              onClick={() => { pushHistory(); addVariantToSet(selectedElement.id) }}
+              className="flex items-center gap-1 h-5 px-1.5 rounded text-[9px] text-[#A259FF] hover:bg-[#A259FF]/15 transition-colors"
+              title="Add variant"
+            >
+              <Plus className="w-3 h-3" /> Add variant
+            </button>
+          </div>
           <div className="space-y-1 max-h-32 overflow-y-auto">
             {selectedElement.children.map((variant: any) => (
               <div key={variant.id} className={`flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer ${selectedElement.defaultVariant === variant.id ? 'bg-[#A259FF]/10' : 'hover:bg-[#2A2A2A]'}`} onClick={() => handleCreateInstance(variant.id)}>

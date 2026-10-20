@@ -590,6 +590,18 @@ interface EditorState {
   
   // Clipboard
   clipboard: DesignElement[]
+  /** PHASE 23 (F5) — property clipboard (source: copy-properties /
+   *  paste-properties actions, 5018 design ctx menu). Holds the style+text
+   *  property subset captured from the source element; null when empty. */
+  propertyClipboard: Partial<DesignElement> | null
+  /** PHASE 23 (F11) — nudge amounts (source: nudgeAmountPicker preferences,
+   *  figma_app). Arrow keys = small, Shift+arrows = large. Figma defaults 1/10. */
+  nudgeAmount: { small: number; large: number }
+  /** PHASE 23 (F14) — comment pin visibility (source: toggle-show-comments). */
+  showComments: boolean
+  /** PHASE 23 (F13) — keyboard shortcuts modal (source:
+   *  keyboard_settings.keyboard_shortcuts_modal). */
+  shortcutsOpen: boolean
   
   // History (undo/redo)
   history: HistoryEntry[]
@@ -713,6 +725,24 @@ interface EditorState {
   // Actions - Clipboard
   copySelected: () => void
   pasteClipboard: () => void
+  /** PHASE 23 (F6) — paste at a canvas point (source: paste-here). */
+  pasteClipboardAt: (x: number, y: number) => void
+  /** PHASE 23 (F5) — copy/paste properties (source: copy-properties + paste-properties). */
+  copyProperties: () => void
+  pasteProperties: () => void
+  /** PHASE 23 (F7) — unlock every element on the page (source: unlock-all). */
+  unlockAllOnPage: () => void
+  /** PHASE 23 (F10) — wrap selection in a frame (source: frame-selection /
+   *  convert-selected-nodes-to-frame, figma_app). */
+  frameSelection: () => void
+  /** PHASE 23 (F8) — one-shot fit bounds to content (source: resize-to-fit). */
+  resizeSelectionToFit: () => void
+  /** PHASE 23 (F15) — add a variant to a component set (source: add-variant, figma_app ×16). */
+  addVariantToSet: (componentSetId: string) => void
+  /** PHASE 23 (F11/F13/F14) setters */
+  setNudgeAmount: (nudge: { small: number; large: number }) => void
+  setShowComments: (show: boolean) => void
+  setShortcutsOpen: (open: boolean) => void
   
   // Actions - History
   undo: () => void
@@ -1612,6 +1642,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   activePageId: 'page-1',
   fileName: 'Untitled',
   clipboard: [],
+  propertyClipboard: null,
+  nudgeAmount: { small: 1, large: 10 },
+  showComments: true,
+  shortcutsOpen: false,
   history: [{ elements: deepCloneElements(initialElements), selectedElementIds: [] }],
   historyIndex: 0,
   maxHistory: 50,
@@ -2931,6 +2965,281 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       isDirty: true,
     })
   },
+
+  // PHASE 23 (F6) — paste here (source: {action:"paste-here",flags:["edit"]},
+  // 5018 design ctx menu). The clipboard content lands so its top-left bbox
+  // corner is exactly the right-click canvas point. Same relative-coords
+  // caveat as pasteClipboard (clipboard entries keep their source coords).
+  pasteClipboardAt: (x, y) => {
+    if (get().viewingVersion) return
+    const state = get()
+    if (state.clipboard.length === 0) return
+    const minX = Math.min(...state.clipboard.map((el) => el.x))
+    const minY = Math.min(...state.clipboard.map((el) => el.y))
+    const newElements = state.clipboard.map((el) =>
+      regenerateIds({ ...el, name: `${el.name} copy`, x: el.x + (x - minX), y: el.y + (y - minY) })
+    )
+    set({
+      elements: [...state.elements, ...newElements],
+      selectedElementIds: newElements.map((el) => el.id),
+      isDirty: true,
+    })
+  },
+
+  // PHASE 23 (F5) — copy properties (source: copy-properties, view_restricted
+  // in the 5018 design ctx menu). Captures the style/text/shape subset —
+  // deliberately NOT position/size/identity/children (Figma parity: paste
+  // properties repaints the target, it does not move/resize it).
+  copyProperties: () => {
+    const state = get()
+    const src = state.selectedElementIds.length
+      ? findElementInList(state.elements, state.selectedElementIds[0])
+      : null
+    if (!src) return
+    const PROP_KEYS = [
+      // paint
+      'fill', 'fills', 'stroke', 'strokes', 'strokeWidth', 'strokeStyle', 'strokeAlign',
+      'cornerRadius', 'cornerRadiusTL', 'cornerRadiusTR', 'cornerRadiusBL', 'cornerRadiusBR',
+      'cornerSmoothing',
+      // appearance
+      'opacity', 'blendMode', 'shadows', 'blurs',
+      // shape params
+      'sides', 'innerRadius', 'arc',
+      // text style
+      'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'textDecoration', 'textAlign',
+      'textAlignVertical', 'lineHeight', 'letterSpacing', 'textColor', 'textCase', 'listType',
+      'listIndent',
+    ] as const
+    const captured: Partial<DesignElement> = {}
+    for (const key of PROP_KEYS) {
+      const v = (src as unknown as Record<string, unknown>)[key]
+      if (v !== undefined) (captured as unknown as Record<string, unknown>)[key] = v
+    }
+    set({ propertyClipboard: captured })
+  },
+
+  // PHASE 23 (F5) — paste properties (source: paste-properties, flags edit).
+  pasteProperties: () => {
+    if (get().viewingVersion) return
+    const state = get()
+    if (!state.propertyClipboard || state.selectedElementIds.length === 0) return
+    let elements = state.elements
+    for (const id of state.selectedElementIds) {
+      elements = updateElementInList(elements, id, { ...state.propertyClipboard })
+    }
+    set({ elements, isDirty: true })
+  },
+
+  // PHASE 23 (F7) — unlock all (source: {action:"unlock-all",flags:["edit","whiteboard"]},
+  // 5018 ctx menu). Unlocks every element on the current page, recursively.
+  unlockAllOnPage: () => {
+    if (get().viewingVersion) return
+    const clearLocks = (els: DesignElement[]): DesignElement[] =>
+      els.map((el) => ({
+        ...el,
+        locked: false,
+        ...(el.children ? { children: clearLocks(el.children) } : {}),
+      }))
+    set((state) => ({ elements: clearLocks(state.elements), isDirty: true }))
+  },
+
+  // PHASE 23 (F10) — frame selection (source: frame-selection +
+  //  convert-selected-nodes-to-frame, figma_app ×2). Mirrors groupElements
+  //  geometry but produces a frame with frame defaults (fill #FFFFFF,
+  //  stroke #E0E0E0, clipContent).
+  frameSelection: () => {
+    if (get().viewingVersion) return
+    return set((state) => {
+      const ids = state.selectedElementIds
+      if (ids.length < 1) return state
+      const elementsToFrame = ids
+        .map((id) => findElementInList(state.elements, id))
+        .filter(Boolean) as DesignElement[]
+      if (elementsToFrame.length < 1) return state
+
+      const getAbsolutePos = (el: DesignElement): { x: number; y: number } => {
+        let absX = el.x, absY = el.y
+        const findParentOffset = (elements: DesignElement[], gpX: number, gpY: number): { x: number; y: number } | null => {
+          for (const parent of elements) {
+            if (parent.children) {
+              const pX = gpX + parent.x
+              const pY = gpY + parent.y
+              if (parent.children.some(c => c.id === el.id)) return { x: pX, y: pY }
+              const nested = findParentOffset(parent.children, pX, pY)
+              if (nested) return nested
+            }
+          }
+          return null
+        }
+        const parentOffset = findParentOffset(state.elements, 0, 0)
+        if (parentOffset) {
+          absX = parentOffset.x + el.x
+          absY = parentOffset.y + el.y
+        }
+        return { x: absX, y: absY }
+      }
+
+      const absoluteElements = elementsToFrame.map(el => {
+        const abs = getAbsolutePos(el)
+        return { ...el, x: abs.x, y: abs.y }
+      })
+
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+      absoluteElements.forEach((el) => {
+        minX = Math.min(minX, el.x)
+        minY = Math.min(minY, el.y)
+        maxX = Math.max(maxX, el.x + el.width)
+        maxY = Math.max(maxY, el.y + el.height)
+      })
+
+      const frameId = generateId('frame')
+      const relativeChildren = absoluteElements.map(el => ({
+        ...el,
+        x: el.x - minX,
+        y: el.y - minY,
+      }))
+      const frame: DesignElement = {
+        id: frameId,
+        name: 'Frame',
+        type: 'frame',
+        x: minX,
+        y: minY,
+        width: maxX - minX,
+        height: maxY - minY,
+        fill: '#FFFFFF',
+        stroke: '#E0E0E0',
+        strokeWidth: 1,
+        strokeStyle: 'solid',
+        strokeAlign: 'center',
+        cornerRadius: 0,
+        cornerRadiusTL: 0,
+        cornerRadiusTR: 0,
+        cornerRadiusBL: 0,
+        cornerRadiusBR: 0,
+        opacity: 100,
+        rotation: 0,
+        visible: true,
+        locked: false,
+        blendMode: 'normal',
+        clipContent: true,
+        children: relativeChildren,
+      }
+
+      let remainingElements = state.elements
+      for (const id of ids) {
+        remainingElements = removeElementFromList(remainingElements, id)
+      }
+      return {
+        elements: [...remainingElements, frame],
+        selectedElementIds: [frameId],
+        isDirty: true,
+      }
+    })
+  },
+
+  // PHASE 23 (F8) — resize to fit (source: resize-to-fit, figma_app ×20 —
+  // inspector button in the 530 transform panel). Containers (frame/group/
+  // section) shrink/grow to the children bbox; text delegates to the existing
+  // text auto-resize engine (applyTextAutoSize).
+  resizeSelectionToFit: () => {
+    if (get().viewingVersion) return
+    const state = get()
+    if (state.selectedElementIds.length !== 1) return
+    const el = findElementInList(state.elements, state.selectedElementIds[0])
+    if (!el) return
+    if (el.type === 'text') {
+      get().applyTextAutoSize(el.id)
+      return
+    }
+    if (!el.children || el.children.length === 0) return
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    el.children.forEach((c) => {
+      minX = Math.min(minX, c.x)
+      minY = Math.min(minY, c.y)
+      maxX = Math.max(maxX, c.x + c.width)
+      maxY = Math.max(maxY, c.y + c.height)
+    })
+    set({
+      elements: updateElementInList(state.elements, el.id, {
+        width: maxX - minX,
+        height: maxY - minY,
+        // keep the visual top-left stable: shift children opposite the delta
+        children: el.children!.map((c) => ({ ...c, x: c.x - minX, y: c.y - minY })),
+      }),
+      isDirty: true,
+    })
+  },
+
+  // PHASE 23 (F15) — add variant (source: add-variant, figma_app ×16 —
+  // component-set context action). Duplicates the source component (the
+  // selected variant when one is selected inside the set, else the first
+  // child) with a fresh value for the FIRST variant property; auto-creates a
+  // "Variant" property when the set has none (Figma behavior).
+  addVariantToSet: (componentSetId) => {
+    if (get().viewingVersion) return
+    return set((state) => {
+      const set = findElementInList(state.elements, componentSetId)
+      if (!set || !set.isComponentSet || !set.children || set.children.length === 0) return state
+
+      // source variant = the selected component if it belongs to this set, else first child
+      const selectedInSet = state.selectedElementIds
+        .map((id) => findElementInList(state.elements, id))
+        .find((e) => e && e.componentSetId === componentSetId)
+      const source = selectedInSet || set.children[0]
+
+      let groupProps = set.variantGroupProperties || {}
+      let firstProp = Object.keys(groupProps)[0]
+      if (!firstProp) {
+        // Figma auto-creates the "Variant" property on add-variant
+        firstProp = 'Variant'
+        groupProps = { [firstProp]: { values: [] } }
+      }
+
+      // fresh value: V{n} not already used for this property
+      const used = new Set([
+        ...set.children.map((c) => c.variantProperties?.[firstProp]).filter(Boolean) as string[],
+        ...groupProps[firstProp].values,
+      ])
+      let n = set.children.length + 1
+      let value = `V${n}`
+      while (used.has(value)) {
+        n += 1
+        value = `V${n}`
+      }
+
+      const newChild: DesignElement = {
+        ...deepCloneElements([source])[0],
+        id: generateId('component'),
+        name: `${source.name} / ${value}`,
+        isComponent: true,
+        componentSetId,
+        componentId: undefined,
+        variantProperties: { ...(source.variantProperties || {}), [firstProp]: value },
+        x: set.children[0].x,
+        y: set.children[0].y, // placed at the same slot; user repositions freely
+      }
+
+      const updatedValues = Array.from(new Set([...groupProps[firstProp].values, value]))
+      const updatedChildren = [...set.children.map((c) => ({ ...c })), newChild]
+
+      return {
+        elements: updateElementInList(state.elements, componentSetId, {
+          children: updatedChildren,
+          variantGroupProperties: { ...groupProps, [firstProp]: { values: updatedValues } },
+        }),
+        isDirty: true,
+      }
+    })
+  },
+
+  // PHASE 23 (F11) — nudge amounts (source: nudgeAmountPicker preferences).
+  setNudgeAmount: (nudge) => set({ nudgeAmount: { small: Math.max(1, nudge.small), large: Math.max(1, nudge.large) } }),
+
+  // PHASE 23 (F14) — comment visibility (source: toggle-show-comments).
+  setShowComments: (show) => set({ showComments: show }),
+
+  // PHASE 23 (F13) — shortcuts modal (source: keyboard_shortcuts_modal).
+  setShortcutsOpen: (open) => set({ shortcutsOpen: open }),
 
   // History - pushHistory saves the CURRENT state after a mutation has been applied.
   // Each history entry represents a snapshot AFTER a change, so undo goes back to the

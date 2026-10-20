@@ -30,6 +30,8 @@ import {
   AlignJustify,
 } from 'lucide-react'
 import { useEditorStore, DesignElement, FillStyle, StrokeStyle, AutoLayout } from '@/store/editor-store'
+// PHASE 23 (F9) — math expressions in number inputs
+import { evaluateMathExpression, isPlainNumber } from '@/lib/math-input'
 import { ColorPicker } from './ColorPicker'
 import { GradientEditor } from './GradientEditor'
 import { EffectsPanel } from './EffectsPanel'
@@ -125,23 +127,53 @@ function StyleMenuButton({ elementId, slot, kind }: { elementId: string; slot: S
   )
 }
 
+/**
+ * PHASE 23 (F9) — math expressions in number inputs (source:
+ * evaluateMathExpression, shared editor bundles 9456/3835). While focused the
+ * field keeps a local draft so expressions like "100/2", "+20" or "(8+2)*3"
+ * can be typed; plain numbers still stream to the parent live. The expression
+ * resolves on Enter/blur; invalid drafts keep the last committed value.
+ */
 function PropertyInput({ label, value, onChange, onBlur, className = '' }: { label: string; value: number | string; onChange: (val: string) => void; onBlur?: () => void; className?: string }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const display = draft !== null ? draft : String(value)
+
+  const commitDraft = () => {
+    if (draft !== null) {
+      const current = typeof value === 'number' ? value : parseFloat(String(value))
+      const resolved = evaluateMathExpression(draft, isNaN(current) ? undefined : current)
+      if (resolved !== null) {
+        onChange(String(Math.round(resolved * 100) / 100))
+      }
+      setDraft(null)
+    }
+    onBlur?.()
+  }
+
   return (
     <div className={`flex items-center gap-1 ${className}`}>
       <span className="text-[10px] text-[#888] w-3.5 shrink-0 text-right">{label}</span>
       <input
         type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={onBlur}
+        value={display}
+        onChange={(e) => {
+          setDraft(e.target.value)
+          // live-update the parent only for plain numbers (existing behavior)
+          if (isPlainNumber(e.target.value)) onChange(e.target.value)
+        }}
+        onFocus={() => setDraft(String(value))}
+        onBlur={commitDraft}
         className="w-full h-6 px-1 text-[11px] border border-[#383838] rounded-sm bg-[#1E1E1E] text-[#DDD] focus:outline-none focus:border-[#0D99FF] tabular-nums transition-colors duration-100"
         onKeyDown={(e) => {
           if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
             e.preventDefault()
-            const num = parseFloat(String(value))
+            // PHASE 23 (F11) — field nudging honors the nudge-amount preference
+            const nudge = useEditorStore.getState().nudgeAmount
+            const num = parseFloat(display)
             if (!isNaN(num)) {
-              const delta = e.shiftKey ? 10 : 1
+              const delta = e.shiftKey ? nudge.large : nudge.small
               const newVal = e.key === 'ArrowUp' ? num + delta : num - delta
+              setDraft(null)
               onChange(String(Math.round(newVal)))
             }
           }
@@ -191,7 +223,7 @@ const FRAME_PRESETS = [
 ]
 
 export function PropertiesPanel() {
-  const { elements, selectedElementIds, updateElement, alignElements, distributeElements, pushHistory, addFill, removeFill, updateFill, addStroke, removeStroke, updateStroke, setBlendMode, flipHorizontal, flipVertical, addComponent, detachInstance, resizeFrameWithConstraints, applyTextAutoSize, addTableRow, removeTableRow, addTableColumn, removeTableColumn, resizeTableColumn, resizeTableRow } = useEditorStore()
+  const { elements, selectedElementIds, updateElement, alignElements, distributeElements, pushHistory, addFill, removeFill, updateFill, addStroke, removeStroke, updateStroke, setBlendMode, flipHorizontal, flipVertical, addComponent, detachInstance, resizeFrameWithConstraints, applyTextAutoSize, addTableRow, removeTableRow, addTableColumn, removeTableColumn, resizeTableColumn, resizeTableRow, resizeSelectionToFit } = useEditorStore()
   const [aspectLocked, setAspectLocked] = useState(false)
   const [cornersLinked, setCornersLinked] = useState(true)
   const [showInspect, setShowInspect] = useState(false)
@@ -462,6 +494,18 @@ export function PropertiesPanel() {
                 <button onClick={() => setAspectLocked(!aspectLocked)} className="flex items-center justify-center w-6 h-6 rounded hover:bg-[#3C3C3C] transition-colors shrink-0" title={aspectLocked ? 'Unlock aspect ratio' : 'Lock aspect ratio'}>
                   {aspectLocked ? <Link2 className="w-3 h-3 text-[#0D99FF]" /> : <Link2Off className="w-3 h-3 text-[#888]" />}
                 </button>
+                {/* PHASE 23 (F8) — resize to fit (source: resize-to-fit button in
+                    the 530 transform panel, figma_app ×20). Containers fit to
+                    their children bbox; text delegates to auto-resize. */}
+                {(element.type === 'text' || (element.children && element.children.length > 0)) && (
+                  <button
+                    onClick={() => { pushHistory(); resizeSelectionToFit() }}
+                    className="flex items-center justify-center h-6 px-1.5 rounded text-[9px] text-[#BBB] hover:bg-[#3C3C3C] hover:text-[#DDD] transition-colors shrink-0"
+                    title="Resize to fit"
+                  >
+                    Fit
+                  </button>
+                )}
               </div>
             </div>
           )}

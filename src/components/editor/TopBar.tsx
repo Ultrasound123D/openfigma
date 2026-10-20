@@ -43,6 +43,8 @@ import {
   Pipette,
 } from 'lucide-react'
 import { useEditorStore } from '@/store/editor-store'
+// PHASE 23 (F1–F4) — clipboard exports (source: 5018 design ctx menu)
+import { copyAsPngToClipboard, copyAsSvgToClipboard, copyTextToClipboard, copyLayerNameToClipboard } from '@/lib/clipboard-io'
 import type { DesignElement } from '@/store/editor-store'
 import {
   DropdownMenu,
@@ -286,12 +288,44 @@ export function TopBar() {
                 ⇧⌘V (not source-extracted — registry is minified). */}
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { pushHistory(); useEditorStore.getState().pasteOverSelection() }}>Paste Over Selection<DropdownMenuShortcut>⇧⌘V</DropdownMenuShortcut></DropdownMenuItem>
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { pushHistory(); useEditorStore.getState().duplicateSelectedElements() }}>Duplicate<DropdownMenuShortcut>⌘D</DropdownMenuShortcut></DropdownMenuItem>
+            {/* PHASE 23 (F1–F4) — copy-as menu (source: 5018 design/dev ctx:
+                {action:"copy-as-png"} / copy-as-svg / copy-text / copy-layer-name,
+                gated by isExportBlockedByApprovals). ⇧⌘C is the Figma-documented
+                binding for Copy as PNG (registry minified in source). */}
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => {
+              const s = useEditorStore.getState()
+              const el = s.selectedElementIds.length ? findElementInList(s.elements, s.selectedElementIds[0]) : null
+              if (el) copyAsPngToClipboard(el, 2)
+            }}>Copy as PNG<DropdownMenuShortcut>⇧⌘C</DropdownMenuShortcut></DropdownMenuItem>
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => {
+              const s = useEditorStore.getState()
+              const el = s.selectedElementIds.length ? findElementInList(s.elements, s.selectedElementIds[0]) : null
+              if (el) copyAsSvgToClipboard(el)
+            }}>Copy as SVG</DropdownMenuItem>
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => {
+              const s = useEditorStore.getState()
+              const el = s.selectedElementIds.length ? findElementInList(s.elements, s.selectedElementIds[0]) : null
+              if (el) copyTextToClipboard(el)
+            }}>Copy Text</DropdownMenuItem>
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => {
+              const s = useEditorStore.getState()
+              const el = s.selectedElementIds.length ? findElementInList(s.elements, s.selectedElementIds[0]) : null
+              if (el) copyLayerNameToClipboard(el)
+            }}>Copy Layer Name</DropdownMenuItem>
+            {/* PHASE 23 (F5) — copy/paste properties (source: copy-properties
+                view_restricted + paste-properties edit, 5018 ctx menu) */}
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().copyProperties()}>Copy Properties</DropdownMenuItem>
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { pushHistory(); useEditorStore.getState().pasteProperties() }}>Paste Properties</DropdownMenuItem>
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { pushHistory(); useEditorStore.getState().deleteSelectedElements() }}>Delete<DropdownMenuShortcut>⌫</DropdownMenuShortcut></DropdownMenuItem>
             <DropdownMenuSeparator className="bg-[#3C3C3C]" />
             {/* PHASE 21 (E16) — find & replace (source: FIND_AND_REPLACE=4;
                 "load all pages before search"). No source-extractable shortcut. */}
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().setFindReplaceOpen(true)}>Find and Replace…</DropdownMenuItem>
             <DropdownMenuSeparator className="bg-[#3C3C3C]" />
+            {/* PHASE 23 (F10) — frame selection (source: frame-selection /
+                convert-selected-nodes-to-frame, figma_app). ⌥⌘G is the
+                Figma-documented binding (registry minified in source). */}
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { pushHistory(); useEditorStore.getState().frameSelection() }}>Frame Selection<DropdownMenuShortcut>⌥⌘G</DropdownMenuShortcut></DropdownMenuItem>
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().selectAll()}>Select All<DropdownMenuShortcut>⌘A</DropdownMenuShortcut></DropdownMenuItem>
             {/* PHASE 21 (E15) — select similar / inverse + select-all-with submenu
                 (source children: select-same-{style,fill,stroke,effect,text,font,instance,variant}) */}
@@ -332,6 +366,11 @@ export function TopBar() {
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().setShowRulers(!useEditorStore.getState().showRulers)}>Toggle Rulers</DropdownMenuItem>
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().setSnapToGrid(!useEditorStore.getState().snapToGrid)}>Toggle Snap to Grid</DropdownMenuItem>
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().setSnapToElements(!useEditorStore.getState().snapToElements)}>Toggle Snap to Elements</DropdownMenuItem>
+            {/* PHASE 23 (F14) — comment visibility (source: toggle-show-comments,
+                figma_app ×2, comments sidebar setting) */}
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().setShowComments(!useEditorStore.getState().showComments)}>
+              Show Comments
+            </DropdownMenuItem>
             <DropdownMenuSeparator className="bg-[#3C3C3C]" />
             {/* PHASE 21 (VW17) — outline mode + variants (source: toggle-outlines,
                 toggle-outline-mode-hidden-layers, toggle-outline-mode-object-bounds).
@@ -365,6 +404,13 @@ export function TopBar() {
             <DropdownMenuSeparator className="bg-[#3C3C3C]" />
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={toggleLeftSidebar}>Toggle Left Panel</DropdownMenuItem>
             <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={toggleRightSidebar}>Toggle Right Panel</DropdownMenuItem>
+            <DropdownMenuSeparator className="bg-[#3C3C3C]" />
+            {/* PHASE 23 (F13) — keyboard shortcuts modal (source:
+                keyboard_settings.keyboard_shortcuts_modal, figma_app). ⌘/ bound
+                by us (registry minified in source). */}
+            <DropdownMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => useEditorStore.getState().setShortcutsOpen(true)}>
+              Keyboard Shortcuts<DropdownMenuShortcut>⌘/</DropdownMenuShortcut>
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
 

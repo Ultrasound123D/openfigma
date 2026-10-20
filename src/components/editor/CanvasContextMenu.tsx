@@ -17,6 +17,8 @@ import { findElementInList } from '@/lib/element-utils'
 import { isBooleanOperandType } from '@/lib/boolean-ops'
 import { isOutlineStrokeCandidate } from '@/lib/outline-stroke'
 import { toast } from '@/hooks/use-toast'
+// PHASE 23 (F1–F4) — clipboard exports (source: 5018 design ctx menu)
+import { copyAsPngToClipboard, copyAsSvgToClipboard, copyTextToClipboard, copyLayerNameToClipboard } from '@/lib/clipboard-io'
 
 interface CanvasContextMenuProps {
   children: React.ReactNode
@@ -53,6 +55,14 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
     selectSimilar,
     selectInverse,
     clipboard,
+    // PHASE 23 — final-audit completions (see PORT-PLAN-23)
+    propertyClipboard,
+    pasteClipboardAt,
+    copyProperties,
+    pasteProperties,
+    unlockAllOnPage,
+    frameSelection,
+    addVariantToSet,
   } = useEditorStore()
 
   const selectedElement = selectedElementIds.length === 1
@@ -72,6 +82,37 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
       case 'paste-over':
         pasteOverSelection()
         pushHistory()
+        break
+      // PHASE 23 (F6) — paste here (source: {action:"paste-here",flags:["edit"]})
+      case 'paste-here':
+        pasteClipboardAt(canvasX, canvasY)
+        pushHistory()
+        break
+      // PHASE 23 (F5) — copy/paste properties
+      case 'copy-properties':
+        copyProperties()
+        toast({ title: 'Properties copied' })
+        break
+      case 'paste-properties':
+        pasteProperties()
+        pushHistory()
+        break
+      // PHASE 23 (F7) — unlock all (source: unlock-all)
+      case 'unlock-all':
+        unlockAllOnPage()
+        pushHistory()
+        break
+      // PHASE 23 (F10) — frame selection (source: frame-selection)
+      case 'frame-selection':
+        frameSelection()
+        pushHistory()
+        break
+      // PHASE 23 (F15) — add variant (source: add-variant, figma_app)
+      case 'add-variant':
+        if (selectedElement?.isComponentSet) {
+          addVariantToSet(selectedElement.id)
+          pushHistory()
+        }
         break
       // PHASE 21 (E15) — select similar / inverse + select-all-with children
       case 'select-similar':
@@ -239,6 +280,11 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
     : null
   const unmaskCandidate = selectedElement?.isMask ? selectedElement : null
 
+  // PHASE 23 (F7) — unlock-all shows only when something is actually locked
+  const anyLocked = (function walk(els: typeof elements): boolean {
+    return els.some((el) => el.locked || (el.children ? walk(el.children) : false))
+  })(elements)
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -252,10 +298,43 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
               Copy
               <ContextMenuShortcut>⌘C</ContextMenuShortcut>
             </ContextMenuItem>
+            {/* PHASE 23 (F1–F4) — copy-as entries (source: 5018 design/dev ctx
+                menu: copy-as-png / copy-as-svg / copy-text / copy-layer-name) */}
+            <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { if (selectedElement) copyAsPngToClipboard(selectedElement, 2) }}>
+              Copy as PNG
+              <ContextMenuShortcut>⇧⌘C</ContextMenuShortcut>
+            </ContextMenuItem>
+            <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { if (selectedElement) copyAsSvgToClipboard(selectedElement) }}>
+              Copy as SVG
+            </ContextMenuItem>
+            {selectedElement?.type === 'text' && (
+              <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { if (selectedElement) copyTextToClipboard(selectedElement) }}>
+                Copy Text
+              </ContextMenuItem>
+            )}
+            <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => { if (selectedElement) copyLayerNameToClipboard(selectedElement) }}>
+              Copy Layer Name
+            </ContextMenuItem>
+            {/* PHASE 23 (F5) — copy/paste properties (source: copy-properties /
+                paste-properties, 5018 ctx menu) */}
+            <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('copy-properties')}>
+              Copy Properties
+            </ContextMenuItem>
+            {propertyClipboard && (
+              <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('paste-properties')}>
+                Paste Properties
+              </ContextMenuItem>
+            )}
             <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('paste')}>
               Paste
               <ContextMenuShortcut>⌘V</ContextMenuShortcut>
             </ContextMenuItem>
+            {clipboard.length > 0 && (
+              <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('paste-here')}>
+                {/* PHASE 23 (F6) — paste here (source: paste-here) */}
+                Paste Here
+              </ContextMenuItem>
+            )}
             {clipboard.length > 0 && (
               <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('paste-over')}>
                 Paste Over Selection
@@ -309,6 +388,18 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
               Paste
               <ContextMenuShortcut>⌘V</ContextMenuShortcut>
             </ContextMenuItem>
+            {clipboard.length > 0 && (
+              <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('paste-here')}>
+                {/* PHASE 23 (F6) — paste here (source: paste-here) */}
+                Paste Here
+              </ContextMenuItem>
+            )}
+            {anyLocked && (
+              <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('unlock-all')}>
+                {/* PHASE 23 (F7) — unlock all (source: unlock-all) */}
+                Unlock All
+              </ContextMenuItem>
+            )}
             <ContextMenuSeparator className="bg-[#3C3C3C]" />
           </>
         )}
@@ -320,6 +411,25 @@ export function CanvasContextMenu({ children, canvasX, canvasY }: CanvasContextM
               <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('group')}>
                 Group
                 <ContextMenuShortcut>⌘G</ContextMenuShortcut>
+              </ContextMenuItem>
+            )}
+            {/* PHASE 23 (F10) — frame selection (source: frame-selection) */}
+            {selectedElementIds.length >= 1 && (
+              <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('frame-selection')}>
+                Frame Selection
+                <ContextMenuShortcut>⌥⌘G</ContextMenuShortcut>
+              </ContextMenuItem>
+            )}
+            {/* PHASE 23 (F15) — add variant (source: add-variant, figma_app ×16) */}
+            {selectedElement?.isComponentSet && (
+              <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('add-variant')}>
+                Add Variant
+              </ContextMenuItem>
+            )}
+            {anyLocked && hasSelection && (
+              <ContextMenuItem className="hover:bg-[#3C3C3C] focus:bg-[#3C3C3C]" onClick={() => handleAction('unlock-all')}>
+                {/* PHASE 23 (F7) — unlock all (source: unlock-all) */}
+                Unlock All
               </ContextMenuItem>
             )}
             {selectedElement?.type === 'group' && (

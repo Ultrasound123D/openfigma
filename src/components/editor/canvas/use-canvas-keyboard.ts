@@ -348,7 +348,10 @@ export function useCanvasKeyboard({
 
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
         e.preventDefault()
-        const delta = e.shiftKey ? 10 : 1
+        // PHASE 23 (F11) — nudge amounts from the preferences store
+        // (source: nudgeAmountPicker, figma_app; Figma defaults 1/10)
+        const nudge = state.nudgeAmount
+        const delta = e.shiftKey ? nudge.large : nudge.small
         state.selectedElementIds.forEach(id => {
           const el = findElementInList(state.elements, id)
           if (el) {
@@ -422,6 +425,21 @@ export function useCanvasKeyboard({
         e.preventDefault()
         state.setSnapToGrid(!state.snapToGrid)
       }
+
+      // PHASE 23 (F13) — ⌘/ keyboard shortcuts modal (source:
+      // keyboard_settings.keyboard_shortcuts_modal; binding chosen by us,
+      // registry minified in source).
+      if (ctrl && !e.shiftKey && e.key === '/') {
+        e.preventDefault()
+        state.setShortcutsOpen(!state.shortcutsOpen)
+      }
+      // PHASE 23 (F1) — ⇧⌘C copy as PNG (source: copy-as-png action, 5018;
+      // binding is Figma-documented, registry minified in source).
+      if (ctrl && e.shiftKey && (e.key === 'c' || e.key === 'C') && state.selectedElementIds.length === 1) {
+        e.preventDefault()
+        const el = findElementInList(state.elements, state.selectedElementIds[0])
+        if (el) void import('@/lib/clipboard-io').then((m) => m.copyAsPngToClipboard(el, 2))
+      }
       // PHASE 11: K = Scale tool (no modifier, tool keys block below handles it)
 
       // Ctrl+Alt shortcuts (Figma compatibility) - prevent browser defaults aggressively
@@ -443,49 +461,34 @@ export function useCanvasKeyboard({
           if (el && el.isComponent) { state.createInstance(id); state.pushHistory() }
         })
       }
-      // Ctrl+Alt+G = Frame Selection (Figma shortcut)
-      if (ctrl && e.altKey && (e.key === 'g' || e.key === 'G')) {
+      // PHASE 23 (F10) — ⌥⌘G frame selection (source: frame-selection /
+      // convert-selected-nodes-to-frame, figma_app). Previously implemented
+      // inline here; now routes through the store action (which also resolves
+      // absolute positions for nested children). Binding is Figma-documented
+      // (registry minified in source).
+      if (ctrl && e.altKey && !e.shiftKey && (e.key === 'g' || e.key === 'G') && state.selectedElementIds.length >= 1) {
         e.preventDefault()
-        if (state.selectedElementIds.length >= 1) {
-          const ids = state.selectedElementIds
-          const elementsToFrame = ids
-            .map(id => findElementInList(state.elements, id))
-            .filter(Boolean) as DesignElement[]
-          if (elementsToFrame.length > 0) {
-            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-            elementsToFrame.forEach(el => {
-              minX = Math.min(minX, el.x)
-              minY = Math.min(minY, el.y)
-              maxX = Math.max(maxX, el.x + el.width)
-              maxY = Math.max(maxY, el.y + el.height)
-            })
-            const frameId = generateId('frame')
-            // Convert children to relative coordinates (relative to frame's origin)
-            const relativeChildren = elementsToFrame.map(el => ({
-              ...el,
-              x: el.x - minX,
-              y: el.y - minY,
-            }))
-            const frame: DesignElement = {
-              id: frameId,
-              name: 'Frame',
-              type: 'frame',
-              x: minX, y: minY,
-              width: maxX - minX,
-              height: maxY - minY,
-              fill: 'transparent', stroke: 'transparent', strokeWidth: 0,
-              strokeStyle: 'solid', strokeAlign: 'center',
-              cornerRadius: 0, cornerRadiusTL: 0, cornerRadiusTR: 0, cornerRadiusBL: 0, cornerRadiusBR: 0,
-              opacity: 100, rotation: 0, visible: true, locked: false,
-              blendMode: 'normal', flipH: false, flipV: false, clipContent: true,
-              children: relativeChildren,
-            }
-            const remaining = state.elements.filter(el => !ids.includes(el.id))
-            state.loadElements([...remaining, frame])
-            state.setSelectedElementIds([frameId])
-            state.pushHistory()
-          }
-        }
+        state.pushHistory()
+        state.frameSelection()
+      }
+      // Ctrl+Alt shortcuts (Figma compatibility) - prevent browser defaults aggressively
+      if (ctrl && e.altKey) {
+        e.preventDefault()
+        e.stopPropagation()
+      }
+      if (ctrl && e.altKey && (e.key === 'k' || e.key === 'K')) {
+        state.selectedElementIds.forEach(id => {
+          const el = findElementInList(state.elements, id)
+          if (el && !el.isComponent) { state.addComponent(id); state.pushHistory() }
+        })
+      }
+      if (ctrl && e.altKey && (e.key === 'b' || e.key === 'B')) {
+        e.preventDefault()
+        e.stopPropagation()
+        state.selectedElementIds.forEach(id => {
+          const el = findElementInList(state.elements, id)
+          if (el && el.isComponent) { state.createInstance(id); state.pushHistory() }
+        })
       }
     }
 

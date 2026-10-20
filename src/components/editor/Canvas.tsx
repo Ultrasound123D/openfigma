@@ -1194,6 +1194,87 @@ const CanvasElement = React.memo(function CanvasElement({
   )
 })
 
+/**
+ * PHASE 23 debug dispatcher — module-level so the React Compiler keeps the
+ * Canvas component's manual memoization intact. Exposed on the window object
+ * as `window.__openfigmaP23(action, payload)` for live verification scripts
+ * (same pattern as __openfigmaPlaceImages PHASE 19 / __openfigmaDebug PHASE 22).
+ */
+function p23Dispatch(action: string, payload?: unknown): unknown {
+  const s = useEditorStore.getState()
+  const p = (payload || {}) as Record<string, unknown>
+  switch (action) {
+    case 'addRect': {
+      const { id, name, x, y, w, h, fill } = p as unknown as { id: string; name: string; x: number; y: number; w: number; h: number; fill: string }
+      s.addElement({
+        id, name, type: 'rectangle', x, y, width: w, height: h,
+        fill, stroke: 'transparent', strokeWidth: 0, strokeStyle: 'solid',
+        cornerRadius: 0, cornerRadiusTL: 0, cornerRadiusTR: 0, cornerRadiusBL: 0, cornerRadiusBR: 0,
+        opacity: 100, rotation: 0, visible: true, locked: false,
+      })
+      return true
+    }
+    case 'state': {
+      return {
+        els: s.elements.map((e) => ({ id: e.id, name: e.name, type: e.type, x: e.x, y: e.y, w: e.width, h: e.height, fill: e.fill, locked: e.locked, children: e.children ? e.children.length : 0 })),
+        sel: s.selectedElementIds,
+        clipboardLen: s.clipboard.length,
+        propClipboard: s.propertyClipboard ? Object.keys(s.propertyClipboard) : null,
+        nudge: s.nudgeAmount,
+        showComments: s.showComments,
+        shortcutsOpen: s.shortcutsOpen,
+        comments: s.comments.length,
+        commentPinsVisible: document.querySelectorAll('[data-testid^="comment-pin-"]').length,
+      }
+    }
+    case 'select': { s.setSelectedElementIds([String(p.id)]); return true }
+    case 'selectMany': { s.setSelectedElementIds(p.ids as string[]); return true }
+    case 'copySelected': { s.copySelected(); return true }
+    case 'copyProperties': { s.copyProperties(); return true }
+    case 'pasteProperties': { s.pasteProperties(); return true }
+    case 'pasteAt': { s.pasteClipboardAt(p.x as number, p.y as number); return true }
+    case 'lockAll': {
+      const lock = (els: DesignElement[]): DesignElement[] =>
+        els.map((el) => ({ ...el, locked: true, ...(el.children ? { children: lock(el.children) } : {}) }))
+      useEditorStore.setState({ elements: lock(useEditorStore.getState().elements) })
+      return true
+    }
+    case 'unlockAll': { s.unlockAllOnPage(); return true }
+    case 'frameSelection': { s.frameSelection(); return true }
+    case 'fit': { s.resizeSelectionToFit(); return true }
+    case 'setNudge': { s.setNudgeAmount(p as unknown as { small: number; large: number }); return true }
+    case 'showComments': { s.setShowComments(Boolean(p.v)); return true }
+    case 'shortcutsOpen': { s.setShortcutsOpen(Boolean(p.v)); return true }
+    case 'makeSet': {
+      const ids = p.ids as string[]
+      s.setSelectedElementIds(ids)
+      s.addComponentSet(ids, 'P23 Set')
+      return true
+    }
+    case 'addVariant': { s.addVariantToSet(String(p.id)); return true }
+    case 'setInfo': {
+      const el = (function find(list: DesignElement[]): DesignElement | null {
+        for (const e of list) { if (e.id === p.id) return e; if (e.children) { const r = find(e.children); if (r) return r } }
+        return null
+      })(s.elements)
+      if (!el) return null
+      return {
+        id: el.id, type: el.type, isComponentSet: el.isComponentSet,
+        children: (el.children || []).map((c) => ({ id: c.id, name: c.name, vp: c.variantProperties })),
+        groupProps: el.variantGroupProperties,
+      }
+    }
+    case 'setElement': {
+      const { id, patch } = p as unknown as { id: string; patch: Partial<DesignElement> }
+      const upd = (list: DesignElement[]): DesignElement[] =>
+        list.map((e) => e.id === id ? { ...e, ...patch } as DesignElement : e.children ? { ...e, children: upd(e.children) } : e)
+      useEditorStore.setState({ elements: upd(useEditorStore.getState().elements) })
+      return true
+    }
+    default: return `unknown:${action}`
+  }
+}
+
 export function Canvas() {
   // PHASE 22 debug hook (pattern: window.__openfigmaPlaceImages from PHASE 19)
   React.useEffect(() => {
@@ -1210,6 +1291,14 @@ export function Canvas() {
         liveEls: s.elements.length,
       }
     }
+  }, [])
+
+  // PHASE 23 debug hook — generic action dispatcher for live verification
+  // (pattern: window.__openfigmaPlaceImages PHASE 19 / __openfigmaDebug PHASE 22).
+  // Implementation lives at module level (p23Dispatch) so the React Compiler
+  // can still preserve the component's manual memoization.
+  React.useEffect(() => {
+    ;(window as unknown as Record<string, unknown>).__openfigmaP23 = p23Dispatch
   }, [])
   // Store state needed for rendering
   // PHASE 22 (C20) — while previewing a version the canvas renders the
@@ -1233,6 +1322,8 @@ export function Canvas() {
   const panY = useEditorStore((s) => s.panY)
   // PHASE 16 — comments
   const comments = useEditorStore((s) => s.comments)
+  // PHASE 23 (F14) — comment pin visibility (source: toggle-show-comments)
+  const showComments = useEditorStore((s) => s.showComments)
   const activeCommentId = useEditorStore((s) => s.activeCommentId)
   const composerPos = useEditorStore((s) => s.composerPos)
   const showGrid = useEditorStore((s) => s.showGrid)
@@ -2184,8 +2275,10 @@ export function Canvas() {
         />
       )}
 
-      {/* PHASE 16 — comment pins + composer + thread popover */}
-      {(() => {
+      {/* PHASE 16 — comment pins + composer + thread popover.
+          PHASE 23 (F14): hidden entirely when showComments is off (source:
+          toggle-show-comments, figma_app ×2). */}
+      {showComments && (() => {
         const cx = containerSize.width / 2 + panX
         const cy = containerSize.height / 2 + panY
         const toScreen = (x: number, y: number) => ({ left: cx + x * zoom, top: cy + y * zoom })

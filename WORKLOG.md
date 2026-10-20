@@ -108,3 +108,37 @@
   swaps leaked across stop/start preview. Now cleared on preview exit
   (render-phase state adjustment pattern — eslint set-state-in-effect forbids
   the effect form).
+
+### DECISION-018 — PHASE 23: registry semantics + the terminal-audit method
+
+**Context.** After PORT-PLAN-17-22 closed, a fresh audit was required to find
+anything still missing. The source command registry (9456-*.min.js,
+`allowedEditorTypes` on 881 entries) never lists plain design files — even
+for GROUP_SELECTION / PASTE_OVER_SELECTION / OUTLINE_STROKE, all proven
+design features.
+
+**Decision.**
+1. Registry semantics settled by a control experiment: the 9456 registry is
+   the next-gen-surface command table (SITES ×672 / SLIDES ×481 / COOPER ×467
+   / WHITEBOARD ×383 / DEV_HANDOFF ×187 / FIGMAKE ×14 / DESIGN ×5 /
+   ILLUSTRATION ×2). Design-editor evidence = presence in `figma_app-*.min.js`
+   (the design app shell) or in the `5018` design/dev context-menu module.
+2. Final-audit gap list built only from those two design-proven sources:
+   14 items (F1–F15 minus F12) → PORT-PLAN-23.
+3. False-positive candidates closed during the audit instead of implemented:
+   scale tool (K, PHASE 11), snap-to-elements toggle (View menu existed),
+   aspect-ratio lock, per-corner radii, ruler units, table add/remove rows.
+4. Frame Selection existed as an inline ⌥⌘G implementation in
+   use-canvas-keyboard; replaced by the store action (also resolves absolute
+   positions for nested children) — one implementation, menu + shortcut.
+5. Test scaffolding follows the established debug-hook pattern
+   (`window.__openfigmaP23`, module-level dispatcher so React Compiler keeps
+   Canvas's manual memoization).
+6. Honest scope marks: shortcuts modal is a cheatsheet (re-binding/pinning
+   out of scope — no extractable behavior); show-rotation-origin left
+   UNKNOWN; paste-here keeps the same relative-coords caveat as plain paste.
+
+**Result.** All 14 gaps live-verified across 5 rounds (33 checks), VLM
+confirmed 4/4 screenshots; clipboard exports proven with real payloads
+(SVG markup string, PNG blob 1945 bytes). Terminal audit concludes the
+complete port: phases 0–23.
